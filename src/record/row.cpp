@@ -26,8 +26,8 @@ uint32_t Row::SerializeTo(char *buf, Schema *schema) const {
 
     for (uint32_t i = 0; i < field_count; ++i) {
       if (!fields_[i]->IsNull()) {
-        uint32_t field_size = fields_[i]->GetLength();
-        std::memcpy(buf + offset, fields_[i]->GetData(), field_size);
+        uint32_t field_size = fields_[i]->SerializeTo(buf + offset);;
+        // std::memcpy(buf + offset, fields_[i]->GetData(), field_size);
         offset += field_size;
       }
     }
@@ -52,25 +52,13 @@ uint32_t Row::DeserializeFrom(char *buf, Schema *schema) {
   fields_.reserve(field_count);
   for (uint32_t i = 0; i < field_count; ++i) {
     bool is_null = (null_bitmap[i / 8] >> (i % 8)) & 1;
+    TypeId field_type = schema->GetColumn(i)->GetType();
 
-    if (is_null) {
-      fields_.emplace_back(Field(schema->GetColumn(i)->GetType()));
-    } else {
-      TypeId field_type = schema->GetColumn(i)->GetType();
-      uint32_t field_len = 0;
-      if (field_type == TypeId::kTypeChar) {
-        uint32_t varchar_len;
-        std::memcpy(&varchar_len, buf + offset, sizeof(uint32_t));
-        offset += sizeof(uint32_t);
-        field_len = varchar_len;
-        fields_.emplace_back(Field(field_type, buf + offset, field_len));
-        offset += field_len;
-      } else {
-        field_len = schema->GetColumn(i)->GetLength();
-        fields_.emplace_back(Field(field_type, buf + offset, field_len));
-        offset += field_len;
-      }
-    }
+    Field *field = nullptr;
+    uint32_t sz = 0;
+    sz = Field::DeserializeFrom(buf + offset, field_type, &field, is_null);
+    offset += sz;    
+    fields_.push_back(field);
   }
   return offset;
 }
@@ -91,7 +79,7 @@ uint32_t Row::GetSerializedSize(Schema *schema) const {
       if (fields_[i]->GetTypeId() == TypeId::kTypeChar) {
         total_size += sizeof(uint32_t);
       }
-      total_size += fields_[i]->GetLength();
+      total_size += fields_[i]->GetSerializedSize();
     }
   }
   return total_size;

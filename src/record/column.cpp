@@ -39,7 +39,7 @@ Column::Column(const Column *other)
 * TODO: Student Implement
 */
 uint32_t Column::SerializeTo(char *buf) const {
-  uint32_t name_length = name_.length;
+  uint32_t name_length = name_.length();
 
   uint32_t offset = 0;
 
