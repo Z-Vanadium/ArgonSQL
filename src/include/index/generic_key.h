@@ -66,6 +66,10 @@ class KeyManager {
   // constructor
   KeyManager(Schema *key_schema, size_t key_size) : key_size_(key_size), key_schema_(key_schema) {}
 
+  void CopyKey(GenericKey* dst, const GenericKey* src){
+    std::memcpy(dst->data, src->data, key_size_);
+  }
+
  private:
   int key_size_;
   Schema *key_schema_;
