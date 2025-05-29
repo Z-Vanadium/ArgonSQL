@@ -24,6 +24,8 @@ class BufferPoolManager {
 
   bool FlushPage(page_id_t page_id);
 
+  void FlushAllPages();
+
   Page *NewPage(page_id_t &page_id);
 
   bool DeletePage(page_id_t page_id);
