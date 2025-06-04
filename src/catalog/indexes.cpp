@@ -43,7 +43,10 @@ uint32_t IndexMetadata::SerializeTo(char *buf) const {
  * TODO: Student Implement
  */
 uint32_t IndexMetadata::GetSerializedSize() const {
-  return 0;
+  // 计算所需空间大小，包括：魔数、索引ID、索引名称（长度+字符串）、
+  // 表ID、键映射的大小以及键映射本身。
+  return sizeof(uint32_t) + sizeof(index_id_t) + MACH_STR_SERIALIZED_SIZE(index_name_) + sizeof(table_id_t) +
+         sizeof(uint32_t) + key_map_.size() * sizeof(uint32_t);
 }
 
 uint32_t IndexMetadata::DeserializeFrom(char *buf, IndexMetadata *&index_meta) {

@@ -28,7 +28,10 @@ uint32_t TableMetadata::SerializeTo(char *buf) const {
  * TODO: Student Implement
  */
 uint32_t TableMetadata::GetSerializedSize() const {
-  return 4 + 4 + MACH_STR_SERIALIZED_SIZE(table_name_) + 4 + schema_->GetSerializedSize();
+  // 计算所需空间大小，包括：魔数、表ID、表名称（长度+字符串）、
+  // 根页面ID以及序列化后的模式。
+  return sizeof(uint32_t) + sizeof(table_id_t) + MACH_STR_SERIALIZED_SIZE(table_name_) + sizeof(page_id_t) +
+         schema_->GetSerializedSize();
 }
 
 /**
