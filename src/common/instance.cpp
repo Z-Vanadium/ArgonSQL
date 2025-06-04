@@ -15,7 +15,7 @@ DBStorageEngine::DBStorageEngine(std::string db_name, bool init, uint32_t buffer
   bpm_ = new BufferPoolManager(buffer_pool_size, disk_mgr_);
 
   // Allocate static page for db storage engine
-  printf("a\n");
+  printf("DBStorageEngine::DBStorageEngine()\n");
   if (init) {
     page_id_t id;
   printf("%d\n", id);

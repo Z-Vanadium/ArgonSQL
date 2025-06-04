@@ -53,7 +53,7 @@ class IndexMetadata {
 class IndexInfo {
  public:
   static IndexInfo *Create() { return new IndexInfo(); }
-
+  inline IndexMetadata *GetMetaData() { return meta_data_; }
   ~IndexInfo() {
     delete meta_data_;
     delete index_;
@@ -64,10 +64,21 @@ class IndexInfo {
  * TODO: Student Implement
  */
   void Init(IndexMetadata *meta_data, TableInfo *table_info, BufferPoolManager *buffer_pool_manager) {
-    // Step1: init index metadata and table info
-    // Step2: mapping index key to key schema
-    // Step3: call CreateIndex to create the index
-    ASSERT(false, "Not Implemented yet.");
+    // 步骤1：初始化索引元数据
+    meta_data_ = meta_data;
+
+    // 步骤2：将索引键映射到键模式。
+    // 这包括根据索引元数据中定义的键映射，从表的模式中选择列来创建键模式。
+    // 注意：这里不再需要手动构建 key_columns 向量，
+    // 因为 Schema::ShallowCopySchema 函数会根据 key_map 自己去 table_schema 中取列。
+    // 所以，删除之前创建 key_columns 向量和循环的代码。
+
+    // 直接调用 Schema::ShallowCopySchema，传入表模式和索引键映射
+    key_schema_ = Schema::ShallowCopySchema(table_info->GetSchema(), meta_data_->GetKeyMapping()); //
+
+    // 步骤3：调用 CreateIndex 创建索引。
+    // 根据 CreateIndex 的实现，假定索引类型为 "bptree"。
+    index_ = CreateIndex(buffer_pool_manager, "bptree");
   }
 
   inline Index *GetIndex() { return index_; }
