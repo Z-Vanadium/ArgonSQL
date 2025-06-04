@@ -10,7 +10,7 @@
 
 # When other libraries are using a shared version of runtime libraries,
 # Google Test also has to use one.
-cmake_minimum_required(VERSION 3.5...3.25)
+cmake_minimum_required(VERSION 3.10...3.25)
 
 if (POLICY CMP0048)
   cmake_policy(SET CMP0048 NEW)

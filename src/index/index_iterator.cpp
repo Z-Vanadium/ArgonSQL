@@ -19,14 +19,36 @@ IndexIterator::~IndexIterator() {
  * TODO: Student Implement
  */
 std::pair<GenericKey *, RowId> IndexIterator::operator*() {
-  ASSERT(false, "Not implemented yet.");
+  return page->GetItem(item_index);
 }
 
 /**
  * TODO: Student Implement
  */
 IndexIterator &IndexIterator::operator++() {
-  ASSERT(false, "Not implemented yet.");
+  item_index ++;
+  
+  if(item_index >= page->GetMaxSize()){
+    page_id_t next_page_id = page->GetNextPageId();
+
+    if(next_page_id != INVALID_PAGE_ID){
+      buffer_pool_manager->UnpinPage(next_page_id, false);
+      current_page_id = next_page_id;
+      auto next_page = buffer_pool_manager->FetchPage(next_page_id);
+      if(next_page != nullptr){
+        auto next_leaf_page = reinterpret_cast<BPlusTreeLeafPage*> (next_page->GetData());
+        page = next_leaf_page;
+        item_index = 0;
+      }
+    }
+    else {
+      buffer_pool_manager->UnpinPage(current_page_id, false);
+      current_page_id = INVALID_PAGE_ID;
+      page = nullptr;
+      item_index = 0;
+      *this = IndexIterator();
+    }
+  }
 }
 
 bool IndexIterator::operator==(const IndexIterator &itr) const {
