@@ -17,6 +17,12 @@
 #include "planner/planner.h"
 #include "utils/utils.h"
 
+extern "C" {
+int yyparse(void);
+#include "parser/minisql_lex.h"
+#include "parser/parser.h"
+}
+
 ExecuteEngine::ExecuteEngine() {
   char path[] = "./databases";
   DIR *dir;
@@ -344,7 +350,15 @@ dberr_t ExecuteEngine::ExecuteCreateTable(pSyntaxNode ast, ExecuteContext *conte
 #ifdef ENABLE_EXECUTE_DEBUG
   LOG(INFO) << "ExecuteCreateTable" << std::endl;
 #endif
-  return DB_FAILED;
+  string db_name = ast->child_->val_;
+  if(dbs_.find(db_name) != dbs_.end()){
+    return DB_ALREADY_EXIST;
+  }
+  else{
+    auto engine = new DBStorageEngine(db_name, true);
+    dbs_.insert(make_pair(db_name, engine));
+    return DB_SUCCESS;
+  }
 }
 
 /**
@@ -354,7 +368,21 @@ dberr_t ExecuteEngine::ExecuteDropTable(pSyntaxNode ast, ExecuteContext *context
 #ifdef ENABLE_EXECUTE_DEBUG
   LOG(INFO) << "ExecuteDropTable" << std::endl;
 #endif
- return DB_FAILED;
+  string db_name = ast->child_->val_;
+
+  if(dbs_.find(db_name) == dbs_.end()){
+    return DB_NOT_EXIST;
+  }
+  else{
+    auto remove_path = ("./databases/" + db_name).c_str();
+    remove(remove_path);
+    delete dbs_[db_name];
+    dbs_.erase(db_name);
+    if(db_name == current_db_){
+      current_db_ = "";
+    }
+    return DB_SUCCESS;
+  }
 }
 
 /**
@@ -364,7 +392,29 @@ dberr_t ExecuteEngine::ExecuteShowIndexes(pSyntaxNode ast, ExecuteContext *conte
 #ifdef ENABLE_EXECUTE_DEBUG
   LOG(INFO) << "ExecuteShowIndexes" << std::endl;
 #endif
-  return DB_FAILED;
+  if (dbs_.empty()) {
+    cout << "Empty set (0.00 sec)" << endl;
+    return DB_SUCCESS;
+  }
+  int max_width = 8;
+  for (const auto &itr : dbs_) {
+    if (itr.first.length() > max_width){
+      max_width = itr.first.length();
+    }
+  }
+  cout << "+" << setfill('-') << setw(max_width + 2) << ""
+       << "+" << endl;
+  cout << "| " << std::left << setfill(' ') << setw(max_width) << "Database"
+       << " |" << endl;
+  cout << "+" << setfill('-') << setw(max_width + 2) << ""
+       << "+" << endl;
+  for (const auto &itr : dbs_) {
+    cout << "| " << std::left << setfill(' ') << setw(max_width) << itr.first << " |" << endl;
+  }
+  cout << "+" << setfill('-') << setw(max_width + 2) << ""
+       << "+" << endl;
+  return DB_SUCCESS;
+
 }
 
 /**
@@ -374,7 +424,81 @@ dberr_t ExecuteEngine::ExecuteCreateIndex(pSyntaxNode ast, ExecuteContext *conte
 #ifdef ENABLE_EXECUTE_DEBUG
   LOG(INFO) << "ExecuteCreateIndex" << std::endl;
 #endif
-  return DB_FAILED;
+  if(current_db_.empty()){
+      cout << "No database selected" << endl;
+      return DB_NOT_EXIST;
+  }
+  else{
+    std::vector<TableInfo*> tables;
+    TableInfo* table_info = nullptr;
+    dbs_[current_db_]->catalog_mgr_->GetTables(tables);
+
+    auto table_name = ast->child_->next_->val_;
+    bool table_is_exist = false;
+    for(const auto& table:tables){
+      if (table->GetTableName() == table_name) {
+        table_is_exist = true;
+        table_info = table;
+        break;
+      }
+    }
+    
+    if (!table_is_exist) {
+      cout << "Table not exists." << endl;
+      return DB_TABLE_NOT_EXIST;
+    }
+
+    auto index_name = ast->child_->val_;
+    std::vector<IndexInfo*> indexs;
+    dbs_[current_db_]->catalog_mgr_->GetTableIndexes(table_name, indexs);
+    for (const auto &index:indexs) {
+      if (index->GetIndexName() == index_name) {
+        cout << "Index " << index_name << " already exists in " << table_name << endl;
+        return DB_INDEX_ALREADY_EXIST;
+      }
+    }
+
+    std::string index_type;
+    index_type = "btree";
+    pSyntaxNode index_node = ast->child_;
+    while (index_node->next_ != nullptr) {
+      index_node = index_node->next_;
+    }
+    if (index_node->val_ != nullptr && string(index_node->val_) == "index type") {
+      index_type = index_node->child_->val_;
+    }
+
+    std::vector<std::string> column_names;
+    pSyntaxNode column_node = ast->child_->next_->next_->child_;
+    while (column_node != nullptr) {
+      column_names.emplace_back(column_node->val_);
+      column_node = column_node->next_;
+    }
+
+    Txn txn;
+    IndexInfo* index_info = nullptr;
+    auto status = dbs_[current_db_]->catalog_mgr_->CreateIndex(table_name, index_name, column_names, &txn, index_info, index_type);
+    if(status != DB_SUCCESS){
+      return DB_SUCCESS;
+    }
+
+    TableIterator iter(table_info->GetTableHeap()->Begin(nullptr));
+    for (; iter != table_info->GetTableHeap()->End(); ++iter) {
+      Row row = *iter;
+      std::vector<Column*> columns = index_info->GetIndexKeySchema()->GetColumns();
+      ASSERT(columns.size() == 1, "InsertExecutor only support single column index");
+      
+      std::vector<Field> fields;
+      fields.push_back(*(row.GetField(columns[0]->GetTableInd())));
+      Row index_row(fields);
+      index_row.SetRowId(row.GetRowId());
+      index_info->GetIndex()->InsertEntry(index_row, row.GetRowId(), nullptr);
+    }
+
+    cout << "Query OK, 0 rows affected" << endl;
+    return DB_SUCCESS;
+  }
+  
 }
 
 /**
@@ -384,7 +508,33 @@ dberr_t ExecuteEngine::ExecuteDropIndex(pSyntaxNode ast, ExecuteContext *context
 #ifdef ENABLE_EXECUTE_DEBUG
   LOG(INFO) << "ExecuteDropIndex" << std::endl;
 #endif
-  return DB_FAILED;
+  if(current_db_.empty()){
+    cout<<"No database selected"<<endl;
+    return DB_NOT_EXIST;
+  }
+  else{
+    std::vector<TableInfo*> tables;
+    TableInfo* table_info = nullptr;
+    dbs_[current_db_]->catalog_mgr_->GetTables(tables);
+    auto index_name = ast->child_->val_;
+    bool index_is_exist = false;
+
+    for(const auto &table:tables){
+      auto is_db_success=dbs_[current_db_]->catalog_mgr_->DropIndex(table->GetTableName(), index_name);
+      if(is_db_success == DB_SUCCESS){
+        index_is_exist = true;
+      }
+    }
+    
+    if(index_is_exist){
+      cout << "Index dropped successfully" << endl;
+      return DB_SUCCESS;
+    }
+    else{
+      cout << "Index not found" << endl;
+      return DB_FAILED;
+    }
+  }
 }
 
 dberr_t ExecuteEngine::ExecuteTrxBegin(pSyntaxNode ast, ExecuteContext *context) {
@@ -415,7 +565,66 @@ dberr_t ExecuteEngine::ExecuteExecfile(pSyntaxNode ast, ExecuteContext *context)
 #ifdef ENABLE_EXECUTE_DEBUG
   LOG(INFO) << "ExecuteExecfile" << std::endl;
 #endif
-  return DB_FAILED;
+
+  auto start_time = std::chrono::system_clock::now();
+  std::string file_name = ast->child_->val_;
+  ifstream sql_file(file_name, ios::in);
+  
+  if (!sql_file.is_open()) {
+    cout << "Failed to open file: " << file_name << endl;
+    return DB_FAILED;
+  }
+
+  std::string sql_line;
+  while (getline(sql_file, sql_line))
+  {
+    if(sql_line.empty() || sql_line[0] == '#'){
+      continue;
+    }
+    else{
+      YY_BUFFER_STATE buffer;
+      buffer = yy_scan_string(sql_line.c_str());
+
+      if (buffer == nullptr) {
+        LOG(ERROR) << "Failed to create yy buffer state." << std::endl;
+        sql_file.close();
+        return DB_FAILED;
+      }
+
+      yy_switch_to_buffer(buffer);
+      MinisqlParserInit();
+      yyparse();
+
+
+      if (MinisqlParserGetError()) {
+        cout << "SQL Error: " << MinisqlParserGetErrorMessage() << endl;
+        MinisqlParserFinish();
+        yy_delete_buffer(buffer);
+        yylex_destroy();
+        sql_file.close();
+        return DB_FAILED;
+      }
+
+      dberr_t result = Execute(MinisqlGetParserRootNode());
+      if (result != DB_SUCCESS) {
+        MinisqlParserFinish();
+        yy_delete_buffer(buffer);
+        yylex_destroy();
+        sql_file.close();
+        return result;
+      }
+
+      MinisqlParserFinish();
+      yy_delete_buffer(buffer);
+      yylex_destroy();
+    }
+  }
+  
+  auto end_time = std::chrono::system_clock::now();
+  double duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count() / 1000.0;
+  cout << "Query OK. (" << duration << " sec)" << endl;
+  sql_file.close();
+  return DB_SUCCESS;
 }
 
 /**
@@ -425,5 +634,9 @@ dberr_t ExecuteEngine::ExecuteQuit(pSyntaxNode ast, ExecuteContext *context) {
 #ifdef ENABLE_EXECUTE_DEBUG
   LOG(INFO) << "ExecuteQuit" << std::endl;
 #endif
- return DB_FAILED;
+  for(auto& entry:dbs_){
+    DBStorageEngine*& db = entry.second;
+    delete db;
+  }
+  return DB_QUIT;
 }

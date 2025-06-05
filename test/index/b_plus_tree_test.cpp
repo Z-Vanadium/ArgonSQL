@@ -10,15 +10,22 @@ static const std::string db_name = "bp_tree_insert_test.db";
 
 TEST(BPlusTreeTests, SampleTest) {
   // Init engine
+  printf("1\n");
   DBStorageEngine engine(db_name);
+  printf("1.1\n");
   std::vector<Column *> columns = {
       new Column("int", TypeId::kTypeInt, 0, false, false),
   };
+  printf("1.2\n");
   Schema *table_schema = new Schema(columns);
+  printf("1.3\n");
   KeyManager KP(table_schema, 17);
+  printf("1.4\n");
   BPlusTree tree(0, engine.bpm_, KP);
+  printf("1.5\n");
   TreeFileManagers mgr("tree_");
   // Prepare data
+  printf("2\n");
   const int n = 2000;
   vector<GenericKey *> keys;
   vector<RowId> values;
@@ -34,6 +41,7 @@ TEST(BPlusTreeTests, SampleTest) {
   }
   vector<GenericKey *> keys_copy(keys);
   // Shuffle data
+  printf("3\n");
   ShuffleArray(keys);
   ShuffleArray(values);
   ShuffleArray(delete_seq);
