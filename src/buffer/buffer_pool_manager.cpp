@@ -17,8 +17,10 @@ BufferPoolManager::BufferPoolManager(size_t pool_size, DiskManager *disk_manager
 BufferPoolManager::~BufferPoolManager() {
   // 析构时，将缓冲池中所有脏页刷新到磁盘。
   // 注意：这里遍历的是 page_table_，它只包含当前在缓冲池中的有效页面。
-  for (auto page_entry : page_table_) { // 使用 auto page_entry : page_table_ 遍历
-    FlushPage(page_entry.first);
+  for (auto const& [page_id, frame_id] : page_table_) { // 使用C++17结构化绑定遍历
+    // FlushPage会处理写回磁盘的逻辑，无论页是否真的脏。
+    // 一个更优化的方法可能是检查 page->IsDirty()，但当前FlushPage的行为是可接受的。
+    FlushPage(page_id);
   }
   delete[] pages_;    // 释放 pages_ 数组内存
   delete replacer_;   // 释放 replacer 对象内存
@@ -126,13 +128,13 @@ Page *BufferPoolManager::NewPage(page_id_t &page_id) {
 
   // 4. 分配一个新的逻辑页ID。
   page_id = disk_manager_->AllocatePage();
-  // 关键修正：如果DiskManager无法分配新页面，则NewPage应返回nullptr。
+  // 关键修正：如果DiskManager无法分配新页面（例如磁盘满），则NewPage应返回nullptr。
   if (page_id == INVALID_PAGE_ID) {
-    // 将获得的帧返回给 free_list_，并重置其状态
-    // 如果是从 replacer 获得的，它在 Victim 中已经被 Pin 了
-    // 此时它没有有效的 page_id 关联，不应该在 replacer 中
-    // 把它放回 free_list_ 最简单且安全
-    free_list_.push_front(frame_id);
+    // 将获得的帧返回给 free_list_，并重置其状态。
+    // 如果帧是从 replacer 获取的，它在 Victim 中已经被 Pin，因此不在 replacer 的可替换列表中。
+    // 将其放回 free_list_ 是最简单且安全的方式，使其可以被后续操作复用。
+    // 同时，对应的 Page 对象需要重置，因为它并未成功关联到一个新的有效 page_id。
+    free_list_.push_front(frame_id); // 将帧返回到空闲列表的前端
     new_page->page_id_ = INVALID_PAGE_ID; // 重置页ID
     new_page->pin_count_ = 0;             // 重置固定计数
     new_page->is_dirty_ = false;          // 重置脏页标志
@@ -143,7 +145,7 @@ Page *BufferPoolManager::NewPage(page_id_t &page_id) {
   // 5. 更新新页面的元数据。
   new_page->page_id_ = page_id;     // 设置页ID为新分配的ID。
   new_page->pin_count_ = 1;         // 固定计数设为1（新页被创建后立即被引用）。
-  new_page->is_dirty_ = true;      // 新创建的页面是脏的，因为它尚未写入磁盘。
+  new_page->is_dirty_ = true;      // 新创建的页面是脏的，因为它尚未写入磁盘（或者内容是全新的）。
   new_page->ResetMemory();          // 清空页面内存，初始化为0。
 
   // 6. 将新页的映射关系添加到页表。
@@ -157,7 +159,7 @@ Page *BufferPoolManager::NewPage(page_id_t &page_id) {
 /**
  * UnpinPage函数：解除指定页的固定。
  * @param page_id 要解除固定的页ID。
- * @param is_dirty 该页是否是脏页（如果为true，需要在写回磁盘时标记为脏）。
+ * @param is_dirty 该页是否是脏页（如果为true，则标记该页内容已被修改）。
  * @return 如果页存在且解除固定成功，则返回true；否则返回false。
  */
 bool BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
@@ -173,7 +175,7 @@ bool BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
   frame_id_t frame_id = it->second; // 获取帧ID。
   Page *page_to_unpin = &pages_[frame_id]; // 获取 Page 对象指针。
 
-  // 2. 如果 pin_count_ 已经为0，说明该页没有被固定，无法再次解除固定。
+  // 2. 如果 pin_count_ 已经为0，说明该页没有被固定，这是一个异常状态或逻辑错误，不应再次解除固定。
   if (page_to_unpin->GetPinCount() == 0) {
     return false;
   }
@@ -182,6 +184,7 @@ bool BufferPoolManager::UnpinPage(page_id_t page_id, bool is_dirty) {
   page_to_unpin->pin_count_--;
 
   // 4. 如果 is_dirty 为 true，则标记页面为脏页。
+  // 注意：如果页面原本就是脏的，此操作会保持其脏状态。
   if (is_dirty) {
     page_to_unpin->is_dirty_ = true;
   }
@@ -212,9 +215,10 @@ bool BufferPoolManager::FlushPage(page_id_t page_id) {
   frame_id_t frame_id = it->second;
   Page *page_to_flush = &pages_[frame_id];
 
-  // 将页面内容写回磁盘。
+  // 将页面内容写回磁盘。DiskManager的WritePage负责实际的I/O。
+  // FlushPage操作应该将页面内容转储到磁盘中，无论其是否被固定。
   disk_manager_->WritePage(page_to_flush->page_id_, page_to_flush->GetData());
-  // 刷新后重置脏页标志。
+  // 刷新后重置脏页标志，因为磁盘上的内容现在与内存中的一致了。
   page_to_flush->is_dirty_ = false;
 
   return true;
@@ -223,60 +227,61 @@ bool BufferPoolManager::FlushPage(page_id_t page_id) {
 // FlushAllPages函数：将所有的页面都转储到磁盘中。
 void BufferPoolManager::FlushAllPages() {
   std::scoped_lock<std::recursive_mutex> lock(latch_); // 获取互斥锁以保证线程安全。
-  // 复制 page_table_ 的键，然后通过键调用 FlushPage，
-  // 因为 FlushPage 不会改变 page_table_ 的结构，所以不需要复制整个 map。
-  std::vector<page_id_t> pages_to_flush;
+  // 遍历 page_table_ 中的所有页。
+  // 为了避免在遍历时修改page_table_（尽管FlushPage当前实现不修改），
+  // 复制page_id列表是一种安全做法，尽管对于当前的FlushPage不是必需的。
+  // 另一种方式是直接遍历并调用 FlushPage。
   for (auto const& [page_id, frame_id] : page_table_) {
-      pages_to_flush.push_back(page_id);
-  }
-  for (page_id_t page_id : pages_to_flush) {
       FlushPage(page_id); // 调用 FlushPage 来刷新每个页面。
   }
 }
 
 /**
  * DeletePage函数：删除一个数据页。
+ * 这包括从缓冲池中移除（如果存在），并通知磁盘管理器释放相应的磁盘空间。
  * @param page_id 要删除的页ID。
- * @return 如果页存在并成功删除，则返回true；否则返回false。
+ * @return 如果操作成功或页面已不存在于磁盘，则返回true；如果页面被固定而无法删除，则返回false。
  */
 bool BufferPoolManager::DeletePage(page_id_t page_id) {
   std::scoped_lock<std::recursive_mutex> lock(latch_); // 获取互斥锁以保证线程安全。
 
-  // 1. 在页表中查找请求的页。
+  // 尝试在页表中查找页面。
   auto it = page_table_.find(page_id);
-  if (it == page_table_.end()) {
-    // 页面不在缓冲池中，或者之前已经删除，返回true表示操作完成（幂等性）。
-    return true;
+
+  if (it != page_table_.end()) {
+    // 页面在缓冲池中。
+    frame_id_t frame_id = it->second;
+    Page *page_to_delete = &pages_[frame_id];
+
+    // 如果页面被固定 (pin_count > 0)，则不能删除。
+    if (page_to_delete->GetPinCount() > 0) {
+      return false; // 无法删除一个被固定的页面。
+    }
+
+    // 从页表中移除。
+    page_table_.erase(it); // 使用迭代器移除，效率更高。
+
+    // 从替换器中移除该帧。调用 Pin 会将其从 LRU 列表中移除，
+    // 标志着该帧不再参与LRU替换（因为它即将成为空闲帧）。
+    replacer_->Pin(frame_id);
+
+    // 将帧添加到空闲列表。
+    free_list_.push_back(frame_id); // 或 free_list_.push_front(frame_id);
+
+    // 重置Page对象的元数据。
+    page_to_delete->page_id_ = INVALID_PAGE_ID;
+    page_to_delete->pin_count_ = 0;
+    page_to_delete->is_dirty_ = false;
+    page_to_delete->ResetMemory(); // 清理页面数据。
   }
 
-  frame_id_t frame_id = it->second; // 获取帧ID。
-  Page *page_to_delete = &pages_[frame_id]; // 获取 Page 对象指针。
-
-  // 2. 检查页面的固定计数。如果 pin_count_ 不为0，则无法删除。
-  if (page_to_delete->GetPinCount() > 0) {
-    return false;
-  }
-
-  // 3. 从页表中移除该页。
-  page_table_.erase(page_id);
-  // 4. 通知 replacer 该帧可以被重新使用（理论上 Victim 之前它应该已经被 Unpin 了）。
-  // 明确地 Pin 一次，确保它从 replacer 中被移除，以免 Victim 错误地选中一个已删除的帧。
-  replacer_->Pin(frame_id);
-
-  // 5. 将帧返回到空闲列表。
-  free_list_.push_back(frame_id);
-
-  // 6. 重置页面的元数据，将页ID设置为INVALID_PAGE_ID，并将脏页标志设为false。
-  page_to_delete->page_id_ = INVALID_PAGE_ID;
-  page_to_delete->pin_count_ = 0;
-  page_to_delete->is_dirty_ = false;
-  page_to_delete->ResetMemory(); // 清空页面内存。
-
-  // 7. 通知 DiskManager 释放该逻辑页ID。
+  // 无论页面是否在缓冲池中，都通知磁盘管理器解除分配该页面。
+  // DiskManager::DeAllocatePage 应该能够处理已经是空闲的页面（幂等性）。
   disk_manager_->DeAllocatePage(page_id);
 
-  return true;
+  return true; // 操作完成。
 }
+
 
 /**
  * IsPageFree函数（辅助函数）：检查一个逻辑页ID是否是空闲的。
@@ -295,9 +300,14 @@ bool BufferPoolManager::IsPageFree(page_id_t page_id) {
 bool BufferPoolManager::CheckAllUnpinned() {
   bool all_unpinned = true;
   for (size_t i = 0; i < pool_size_; i++) {
-    if (pages_[i].pin_count_ != 0) {
+    // 只检查在 page_table_ 中实际被使用的页框
+    // 遍历 pages_ 数组可能包含尚未被使用或者已经被释放回 free_list_ 的页框
+    // 更准确的检查是遍历 page_table_
+    // 但为了保持与原意（检查所有物理页框对象）一致，这里仍遍历 pages_
+    // 同时，一个更严格的检查会确认 page_id != INVALID_PAGE_ID
+    if (pages_[i].GetPageId() != INVALID_PAGE_ID && pages_[i].GetPinCount() != 0) {
       all_unpinned = false;
-      LOG(ERROR) << "page " << pages_[i].page_id_ << " pin count:" << pages_[i].pin_count_ << endl;
+      LOG(ERROR) << "page " << pages_[i].GetPageId() << " pin count:" << pages_[i].GetPinCount() << std::endl;
     }
   }
   return all_unpinned;
