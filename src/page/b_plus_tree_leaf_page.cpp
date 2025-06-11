@@ -28,6 +28,8 @@ void LeafPage::Init(page_id_t page_id, page_id_t parent_id, int key_size, int ma
   SetParentPageId(parent_id);
   SetMaxSize(max_size);
   SetKeySize(key_size);
+  SetNextPageId(INVALID_PAGE_ID);
+  // memset(data_, 0, PAGE_SIZE); 
 }
 
 /**
@@ -110,22 +112,30 @@ std::pair<GenericKey *, RowId> LeafPage::GetItem(int index) { return {KeyAt(inde
  * @return page size after insertion
  */
 int LeafPage::Insert(GenericKey *key, const RowId &value, const KeyManager &KM) {
-  int size = GetSize();
-  int index = KeyIndex(key, KM);
-  if (index == size - 1) {
-    SetKeyAt(index + 1, key);
-    SetValueAt(index + 1, value);
+  printf("LeafPage::Insert: 接收到键，对应值 RowId(%u, %u)\n", value.GetPageId(), value.GetSlotNum());
+    printf("LeafPage::Insert: 页面 %u 插入qian内容 (大小 %d):\n", GetPageId(), GetSize());
+    for (int dbg_idx = 0; dbg_idx < GetSize(); ++dbg_idx) {
+        printf("  [%d]: 键, 值 (%u, %u)\n", dbg_idx, ValueAt(dbg_idx).GetPageId(), ValueAt(dbg_idx).GetSlotNum());
+    }
+    int current_size = GetSize();
+    int actual_insert_idx = 0;
+    while (actual_insert_idx < current_size && KM.CompareKeys(KeyAt(actual_insert_idx), key) < 0) {
+        actual_insert_idx++;
+    }
+    for (int i = current_size; i > actual_insert_idx; --i) {
+        SetKeyAt(i, KeyAt(i - 1));
+        SetValueAt(i, ValueAt(i - 1));
+    }
+    SetKeyAt(actual_insert_idx, key);
+    SetValueAt(actual_insert_idx, value);
+    
     IncreaseSize(1);
+    printf("LeafPage::Insert: 页面 %u 插入后内容 (大小 %d):\n", GetPageId(), GetSize());
+    for (int dbg_idx = 0; dbg_idx < GetSize(); ++dbg_idx) {
+        printf("  [%d]: 键, 值 (%u, %u)\n", dbg_idx, ValueAt(dbg_idx).GetPageId(), ValueAt(dbg_idx).GetSlotNum());
+    }
+    printf("---------------------------\n");
     return GetSize();
-  }
-  for (int i = size - 1; i > index; --i) {
-    SetKeyAt(i + 1, KeyAt(i));
-    SetValueAt(i + 1, ValueAt(i));
-  }
-  SetKeyAt(index + 1, key);
-  SetValueAt(index + 1, value);
-  IncreaseSize(1);
-  return GetSize();
 }
 
 /*****************************************************************************

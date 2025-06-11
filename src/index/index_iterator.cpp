@@ -34,11 +34,14 @@ IndexIterator &IndexIterator::operator++() {
     if (next_page_id == INVALID_PAGE_ID) {
       item_index = 0;
       current_page_id = INVALID_PAGE_ID;
+      page = nullptr;
       return *this;
     }
     current_page_id = INVALID_PAGE_ID;
     item_index = 0;
-    page = reinterpret_cast<LeafPage *>(buffer_pool_manager->FetchPage(current_page_id)->GetData());
+    
+    Page *new_raw_page = buffer_pool_manager->FetchPage(current_page_id);
+    page = reinterpret_cast<LeafPage *>(new_raw_page->GetData());
     return *this;
   } 
   else {

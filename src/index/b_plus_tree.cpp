@@ -86,8 +86,10 @@ bool BPlusTree::Insert(GenericKey *key, const RowId &value, Txn *transaction) {
         StartNewTree(key, value);
         return true;
     }
+    else{
+      return InsertIntoLeaf(key, value, transaction);
+    }
 // printf("root_page_id_ = %d\n", root_page_id_);
-    return InsertIntoLeaf(key, value, transaction);
 }
 /*
  * Insert constant key & value pair into an empty tree
@@ -98,9 +100,9 @@ bool BPlusTree::Insert(GenericKey *key, const RowId &value, Txn *transaction) {
 void BPlusTree::StartNewTree(GenericKey *key, const RowId &value) {
     //printf("root_page_id_ = %d\n", root_page_id_);
     Page *new_page = buffer_pool_manager_->NewPage(root_page_id_);
-    if (new_page == nullptr) {
-        throw std::runtime_error("Out of memory: Cannot allocate new page for B+ tree root.");
-    }
+    // if (new_page == nullptr) {
+    //     throw std::runtime_error("Out of memory: Cannot allocate new page for B+ tree root.");
+    // }
 
     BPlusTreeLeafPage *root_leaf_page = reinterpret_cast<BPlusTreeLeafPage *>(new_page->GetData());
 
@@ -122,6 +124,7 @@ void BPlusTree::StartNewTree(GenericKey *key, const RowId &value) {
  * keys return false, otherwise return true.
  */
 bool BPlusTree::InsertIntoLeaf(GenericKey *key, const RowId &value, Txn *transaction) {
+  // printf("InsertIntoLeaf: 准备向叶页插入键，对应 RowId(%u, %u)\n", value.GetPageId(), value.GetSlotNum());
 
   // printf("a root_page_id_ = %d\n", root_page_id_);
     Page *page = FindLeafPage(key, root_page_id_, false);
@@ -132,7 +135,7 @@ bool BPlusTree::InsertIntoLeaf(GenericKey *key, const RowId &value, Txn *transac
     bool found = leaf_page->Lookup(key, t, processor_);
     if (found) {
         buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);
-        return false;
+        return true;
     }
     
     leaf_page->Insert(key, value, processor_);
