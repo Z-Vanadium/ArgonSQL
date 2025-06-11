@@ -33,6 +33,9 @@ BufferPoolManager::~BufferPoolManager() {
  */
 Page *BufferPoolManager::FetchPage(page_id_t page_id) {
   std::scoped_lock<std::recursive_mutex> lock(latch_); // 获取互斥锁以保证线程安全。
+  if(page_id == INVALID_PAGE_ID) {
+    return nullptr;
+  }
 
   // 1. 在页表中查找请求的页 (P)。
   auto it = page_table_.find(page_id);

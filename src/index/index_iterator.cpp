@@ -19,6 +19,7 @@ IndexIterator::~IndexIterator() {
  * TODO: Student Implement
  */
 std::pair<GenericKey *, RowId> IndexIterator::operator*() {
+  // printf("$ %d %d\n", page->GetItem(item_index).second.GetPageId(), page->GetItem(item_index).second.GetSlotNum());
   return page->GetItem(item_index);
 }
 
@@ -26,35 +27,30 @@ std::pair<GenericKey *, RowId> IndexIterator::operator*() {
  * TODO: Student Implement
  */
 IndexIterator &IndexIterator::operator++() {
-  item_index ++;
-  
-  if(item_index >= page->GetMaxSize()){
+  item_index++;
+  if (item_index == page->GetSize()) {
     page_id_t next_page_id = page->GetNextPageId();
-
-    if(next_page_id != INVALID_PAGE_ID){
-      buffer_pool_manager->UnpinPage(next_page_id, false);
-      current_page_id = next_page_id;
-      auto next_page = buffer_pool_manager->FetchPage(next_page_id);
-      if(next_page != nullptr){
-        auto next_leaf_page = reinterpret_cast<BPlusTreeLeafPage*> (next_page->GetData());
-        page = next_leaf_page;
-        item_index = 0;
-      }
-    }
-    else {
-      buffer_pool_manager->UnpinPage(current_page_id, false);
-      current_page_id = INVALID_PAGE_ID;
-      page = nullptr;
+    buffer_pool_manager->UnpinPage(current_page_id, false);
+    if (next_page_id == INVALID_PAGE_ID) {
       item_index = 0;
-      *this = IndexIterator();
+      current_page_id = INVALID_PAGE_ID;
+      return *this;
     }
+    current_page_id = INVALID_PAGE_ID;
+    item_index = 0;
+    page = reinterpret_cast<LeafPage *>(buffer_pool_manager->FetchPage(current_page_id)->GetData());
+    return *this;
+  } 
+  else {
+    return *this;
   }
 }
 
 bool IndexIterator::operator==(const IndexIterator &itr) const {
-  return current_page_id == itr.current_page_id && item_index == itr.item_index;
+  return (current_page_id == itr.current_page_id) && (item_index == itr.item_index);
 }
 
 bool IndexIterator::operator!=(const IndexIterator &itr) const {
-  return !(*this == itr);
+  // printf("%d %d %d %d\n", this->current_page_id, this->item_index, itr.current_page_id, itr.item_index);
+  return !((*this) == itr);
 }

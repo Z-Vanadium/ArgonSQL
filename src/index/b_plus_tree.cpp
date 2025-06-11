@@ -106,7 +106,7 @@ void BPlusTree::StartNewTree(GenericKey *key, const RowId &value) {
 
     UpdateRootPageId(true);
     root_leaf_page->Init(root_page_id_, INVALID_PAGE_ID, processor_.GetKeySize(), leaf_max_size_);
-    root_leaf_page->SetNextPageId(INVALID_PAGE_ID);
+    // root_leaf_page->SetNextPageId(INVALID_PAGE_ID);
     bool inserted = root_leaf_page->Insert(key, value, processor_);
     // ASSERT(inserted, "First insert into new tree failed: key already exists.");
 
@@ -128,12 +128,12 @@ bool BPlusTree::InsertIntoLeaf(GenericKey *key, const RowId &value, Txn *transac
     BPlusTreeLeafPage *leaf_page = reinterpret_cast<BPlusTreeLeafPage *>(page);
   // printf("b\n");
 
-    // RowId t;
-    // bool found = leaf_page->Lookup(key, t, processor_);
-    // if (found) {
-    //     buffer_pool_manager_->UnpinPage(leaf_page_id, false);
-    //     return false;
-    // }
+    RowId t;
+    bool found = leaf_page->Lookup(key, t, processor_);
+    if (found) {
+        buffer_pool_manager_->UnpinPage(leaf_page->GetPageId(), false);
+        return false;
+    }
     
     leaf_page->Insert(key, value, processor_);
     if (leaf_page->GetSize() == leaf_page->GetMaxSize()) {
@@ -453,10 +453,14 @@ bool BPlusTree::AdjustRoot(BPlusTreePage *old_root_node) {
  * @return : index iterator
  */
 IndexIterator BPlusTree::Begin() {
+  if(IsEmpty()){
+    return IndexIterator();
+  }
   // Find the leftmost leaf page
-  auto leftmost_page = reinterpret_cast<BPlusTreeLeafPage*>(FindLeafPage(nullptr, root_page_id_, true)->GetData());
-  buffer_pool_manager_->UnpinPage(leftmost_page->GetPageId(), false);
-  return IndexIterator(leftmost_page->GetPageId(), buffer_pool_manager_, 0);
+  Page *page = FindLeafPage(nullptr, root_page_id_, true);
+  auto leaf_page = reinterpret_cast<BPlusTreeLeafPage *>(page->GetData());
+  buffer_pool_manager_->UnpinPage(page->GetPageId(), false);
+  return IndexIterator(page->GetPageId(), buffer_pool_manager_);
 }
 
 /*
@@ -476,7 +480,7 @@ IndexIterator BPlusTree::Begin(const GenericKey *key) {
  * @return : index iterator
  */
 IndexIterator BPlusTree::End() {
-  return IndexIterator();
+  return IndexIterator(INVALID_PAGE_ID, buffer_pool_manager_, 0);
 }
 
 /*****************************************************************************

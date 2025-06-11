@@ -7,6 +7,7 @@ static const std::string db_name = "bp_tree_insert_test.db";
 
 TEST(BPlusTreeTests, IndexIteratorTest) {
   // Init engine
+  // printf("1\n");
   DBStorageEngine engine(db_name);
   std::vector<Column *> columns = {
       new Column("int", TypeId::kTypeInt, 0, false, false),
@@ -15,6 +16,7 @@ TEST(BPlusTreeTests, IndexIteratorTest) {
   KeyManager KP(table_schema, 16);
   BPlusTree tree(0, engine.bpm_, KP);
   // Generate insert record
+  // printf("2\n");
   vector<GenericKey *> insert_key;
   for (int i = 1; i <= 50; i++) {
     GenericKey *key = KP.InitKey();
@@ -24,6 +26,7 @@ TEST(BPlusTreeTests, IndexIteratorTest) {
     tree.Insert(key, RowId(i * 100), nullptr);
   }
   // Generate delete record
+  // printf("3\n");
   vector<GenericKey *> delete_key;
   for (int i = 2; i <= 50; i += 2) {
     GenericKey *key = KP.InitKey();
@@ -33,6 +36,7 @@ TEST(BPlusTreeTests, IndexIteratorTest) {
     tree.Remove(key);
   }
   // Search keys
+  // printf("4\n");
   vector<RowId> v;
   vector<GenericKey *> not_delete_key;
   for (auto key : delete_key) {
@@ -47,10 +51,19 @@ TEST(BPlusTreeTests, IndexIteratorTest) {
     ASSERT_EQ(i * 100, v[v.size() - 1].Get());
   }
   // Iterator
+  // printf("5\n");
   int i = 0;
-  for (auto iter = tree.Begin(); iter != tree.End(); ++iter) {
+  auto iter = tree.Begin();
+  // printf("5.1\n");
+  auto end = tree.End();
+  // printf("5.2\n");
+
+  for (; iter != end; ++iter) {
+    // printf("i=%d\n", i);
     ASSERT_TRUE(KP.CompareKeys(not_delete_key[i++], (*iter).first) == 0);  // if equal, CompareKeys return 0
     EXPECT_EQ(RowId((2 * i - 1) * 100), (*iter).second);
+
+    // printf("--%d\n", iter != end);
   }
   ASSERT_EQ(25, i);
 }
