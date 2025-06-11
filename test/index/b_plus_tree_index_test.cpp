@@ -41,6 +41,7 @@ TEST(BPlusTreeTests, BPlusTreeIndexSimpleTest) {
       throw logic_error("Failed to allocate header page.");
     }
   }
+  printf("1\n");
   std::vector<Column *> columns = {new Column("id", TypeId::kTypeInt, 0, false, false),
                                    new Column("name", TypeId::kTypeChar, 64, 1, true, false),
                                    new Column("account", TypeId::kTypeFloat, 2, true, false)};
@@ -55,6 +56,7 @@ TEST(BPlusTreeTests, BPlusTreeIndexSimpleTest) {
     RowId rid(1000, i);
     ASSERT_EQ(DB_SUCCESS, index->InsertEntry(row, rid, nullptr));
   }
+  printf("2\n");
   // Test Scan
   std::vector<RowId> ret;
   for (int i = 0; i < 10; i++) {
@@ -62,9 +64,12 @@ TEST(BPlusTreeTests, BPlusTreeIndexSimpleTest) {
                               Field(TypeId::kTypeChar, const_cast<char *>("minisql"), 7, true)};
     Row row(fields);
     RowId rid(1000, i);
+  printf("2.1\n");
     ASSERT_EQ(DB_SUCCESS, index->ScanKey(row, ret, nullptr));
+  printf("2.2\n");
     ASSERT_EQ(rid.Get(), ret[i].Get());
   }
+  printf("3\n");
   // Iterator Scan
   IndexIterator iter = index->GetBeginIterator();
   uint32_t i = 0;
