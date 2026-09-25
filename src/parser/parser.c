@@ -40,9 +40,6 @@ void MinisqlParserSetError(char *msg) {
     return;
   }
   minisql_parser_error_ = 1;
-  if (minisql_parser_error_message_ != NULL) {
-    printf("minisql parse error message not null in MinisqlParserSetError.\n");
-  }
   printf("Minisql parse error at line %d, col %d, message: %s\n", minisql_parser_line_no_, minisql_parser_column_no_,
          msg);
   minisql_parser_error_message_ = msg;

@@ -15,10 +15,8 @@ DBStorageEngine::DBStorageEngine(std::string db_name, bool init, uint32_t buffer
   bpm_ = new BufferPoolManager(buffer_pool_size, disk_mgr_);
 
   // Allocate static page for db storage engine
-  printf("DBStorageEngine::DBStorageEngine()\n");
   if (init) {
     page_id_t id;
-  printf("%d\n", id);
     if (!bpm_->IsPageFree(CATALOG_META_PAGE_ID)) {
       throw logic_error("Catalog meta page not free.");
     }
@@ -32,7 +30,6 @@ DBStorageEngine::DBStorageEngine(std::string db_name, bool init, uint32_t buffer
       throw logic_error("Failed to allocate header page.");
     }
     if (bpm_->IsPageFree(CATALOG_META_PAGE_ID) || bpm_->IsPageFree(INDEX_ROOTS_PAGE_ID)) {
-      printf("c\n");
       exit(1);
     }
     bpm_->UnpinPage(CATALOG_META_PAGE_ID, false);

@@ -74,10 +74,8 @@ page_id_t InternalPage::Lookup(const GenericKey *key, const KeyManager &KM) {
   int l, r, m;
   l = 1;
   r = GetSize() - 1;
-  // printf("%d %d\n", l, r);
   while(l <= r){
     m = (l + r) / 2;
-    // printf("m = %d\n", m);
     if(KM.CompareKeys(key, KeyAt(m)) > 0){
       l = m + 1;
     }

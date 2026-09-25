@@ -42,18 +42,11 @@ pSyntaxNode CreateSyntaxNode(SyntaxNodeType type, char *val) {
     list_node->next_ = minisql_parser_syntax_node_list_;
     minisql_parser_syntax_node_list_ = list_node;
   }
-#ifdef ENABLE_PARSER_DEBUG
-  printf("Create syntax node: node_id = %d, type = %s, line = %d, col = %d\n", node->id_,
-         GetSyntaxNodeTypeStr(node->type_), node->line_no_, node->col_no_);
-#endif
   return node;
 }
 
 void FreeSyntaxNode(pSyntaxNode node) {
   if (node != NULL) {
-#ifdef ENABLE_PARSER_DEBUG
-    printf("Free syntax node: node_id = %d\n", node->id_);
-#endif
     if (node->val_ != NULL) {
       free(node->val_);
     }

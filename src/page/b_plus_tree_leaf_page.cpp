@@ -110,11 +110,6 @@ std::pair<GenericKey *, RowId> LeafPage::GetItem(int index) { return {KeyAt(inde
  * @return page size after insertion
  */
 int LeafPage::Insert(GenericKey *key, const RowId &value, const KeyManager &KM) {
-  // printf("LeafPage::Insert: 接收到键，对应值 RowId(%u, %u)\n", value.GetPageId(), value.GetSlotNum());
-  //   printf("LeafPage::Insert: 页面 %u 插入qian内容 (大小 %d):\n", GetPageId(), GetSize());
-    // for (int dbg_idx = 0; dbg_idx < GetSize(); ++dbg_idx) {
-    //     printf("  [%d]: 键, 值 (%u, %u)\n", dbg_idx, ValueAt(dbg_idx).GetPageId(), ValueAt(dbg_idx).GetSlotNum());
-    // }
     int current_size = GetSize();
     int actual_insert_idx = 0;
     while (actual_insert_idx < current_size && KM.CompareKeys(KeyAt(actual_insert_idx), key) < 0) {
@@ -128,11 +123,6 @@ int LeafPage::Insert(GenericKey *key, const RowId &value, const KeyManager &KM) 
     SetValueAt(actual_insert_idx, value);
     
     IncreaseSize(1);
-    // printf("LeafPage::Insert: 页面 %u 插入后内容 (大小 %d):\n", GetPageId(), GetSize());
-    // for (int dbg_idx = 0; dbg_idx < GetSize(); ++dbg_idx) {
-    //     printf("  [%d]: 键, 值 (%u, %u)\n", dbg_idx, ValueAt(dbg_idx).GetPageId(), ValueAt(dbg_idx).GetSlotNum());
-    // }
-    // printf("---------------------------\n");
     return GetSize();
 }
 

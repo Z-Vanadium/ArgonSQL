@@ -108,13 +108,11 @@ bool BPlusTree::GetValue(const GenericKey *key, std::vector<RowId> &result, Txn 
  * keys return false, otherwise return true.
  */
 bool BPlusTree::Insert(GenericKey *key, const RowId &value, Txn *transaction) {
-// printf("root_page_id_ = %d\n", root_page_id_);
     if (IsEmpty()) {
         StartNewTree(key, value);
         return true;
     }
     return InsertIntoLeaf(key, value, transaction);
-// printf("root_page_id_ = %d\n", root_page_id_);
 }
 /*
  * Insert constant key & value pair into an empty tree
@@ -123,7 +121,6 @@ bool BPlusTree::Insert(GenericKey *key, const RowId &value, Txn *transaction) {
  * tree's root page id and insert entry directly into leaf page.
  */
 void BPlusTree::StartNewTree(GenericKey *key, const RowId &value) {
-    //printf("root_page_id_ = %d\n", root_page_id_);
     Page *new_page = buffer_pool_manager_->NewPage(root_page_id_);
     if (new_page == nullptr) {
         throw std::runtime_error("Out of memory: Cannot allocate new page for B+ tree root.");
@@ -149,12 +146,8 @@ void BPlusTree::StartNewTree(GenericKey *key, const RowId &value) {
  * keys return false, otherwise return true.
  */
 bool BPlusTree::InsertIntoLeaf(GenericKey *key, const RowId &value, Txn *transaction) {
-  // printf("InsertIntoLeaf: 准备向叶页插入键，对应 RowId(%u, %u)\n", value.GetPageId(), value.GetSlotNum());
-
-  // printf("a root_page_id_ = %d\n", root_page_id_);
     Page *page = FindLeafPage(key, root_page_id_, false);
     BPlusTreeLeafPage *leaf_page = reinterpret_cast<BPlusTreeLeafPage *>(page);
-  // printf("b\n");
 
     RowId t;
     bool found = leaf_page->Lookup(key, t, processor_);
@@ -537,29 +530,23 @@ Page *BPlusTree::FindLeafPage(const GenericKey *key, page_id_t page_id, bool lef
   // page_id = (page_id == INVALID_PAGE_ID) ? root_page_id_ : page_id;
   auto page = buffer_pool_manager_->FetchPage(page_id);
   auto t_page = reinterpret_cast<BPlusTreePage *>(page->GetData());
-  // printf("FindLeafPage page = %d\n", page_id);
   
   while (!t_page->IsLeafPage()) {
     BPlusTreeInternalPage *internal_page = reinterpret_cast<BPlusTreeInternalPage *>(page->GetData());
     page_id_t next_page_id;
-// printf("@1 %d\n", leftMost);
     if (leftMost) {
       next_page_id = internal_page->ValueAt(0); // Leftmost child
     } else {
       // Find the appropriate child page based on the key
       next_page_id = internal_page->Lookup(key, processor_);
     }
-// printf("@2\n");
-    // printf("d next_page_id = %d\n", next_page_id);
     // auto next_page = reinterpret_cast<BPlusTreePage *>(buffer_pool_manager_->FetchPage(next_page_id)->GetData());
     // Unpin current page before fetching the next one
     buffer_pool_manager_->UnpinPage(internal_page->GetPageId(), false); // No modification, so not dirty
     page = buffer_pool_manager_->FetchPage(next_page_id);
     t_page = reinterpret_cast<BPlusTreePage *>(page->GetData());
-    // printf("%llu, ", page->GetPageId());
 
   }
-  // printf("c page = %d\n", page_id);
   return page;
 }
 

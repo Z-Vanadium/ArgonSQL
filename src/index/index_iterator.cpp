@@ -122,6 +122,5 @@ bool IndexIterator::operator==(const IndexIterator &itr) const {
 }
 
 bool IndexIterator::operator!=(const IndexIterator &itr) const {
-  // printf("%d %d %d %d\n", this->current_page_id, this->item_index, itr.current_page_id, itr.item_index);
   return !((*this) == itr);
 }

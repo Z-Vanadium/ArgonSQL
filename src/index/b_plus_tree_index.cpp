@@ -10,7 +10,6 @@ BPlusTreeIndex::BPlusTreeIndex(index_id_t index_id, IndexSchema *key_schema, siz
 
 dberr_t BPlusTreeIndex::InsertEntry(const Row &key, RowId row_id, Txn *txn) {
   // ASSERT(row_id.Get() != INVALID_ROWID.Get(), "Invalid row id for index insert.");
-  // printf("InsertEntry: 准备插入键，对应 RowId(%u, %u)\n", row_id.GetPageId(), row_id.GetSlotNum());
   GenericKey *index_key = processor_.InitKey();
   processor_.SerializeFromKey(index_key, key, key_schema_);
 
