@@ -43,6 +43,9 @@ TableIterator &TableIterator::operator++() {
   RowId rid = row.GetRowId();
   page_id_t page_id = rid.GetPageId();
   RowId next_rid;
+  if (page_id == INVALID_PAGE_ID) {
+    return *this;
+  }
   auto page = reinterpret_cast<TablePage*>(table_heap_->buffer_pool_manager_->FetchPage(page_id));
 
   if(page == nullptr){
@@ -50,7 +53,8 @@ TableIterator &TableIterator::operator++() {
     return *this;
   }
   
-  else if(page->GetNextTupleRid(rid, &next_rid)){
+  page_id_t next_page_id = page->GetNextPageId();
+  if(page->GetNextTupleRid(rid, &next_rid)){
     row.SetRowId(next_rid);
     table_heap_->GetTuple(&row, txn_);
     table_heap_->buffer_pool_manager_->UnpinPage(page_id, false);
@@ -58,7 +62,7 @@ TableIterator &TableIterator::operator++() {
   }
 
   auto pre_id = page_id;
-  page_id = page->GetNextPageId();
+  page_id = next_page_id;
   table_heap_->buffer_pool_manager_->UnpinPage(pre_id, false);
 
   while(page_id != INVALID_PAGE_ID) {

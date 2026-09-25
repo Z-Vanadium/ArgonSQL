@@ -51,21 +51,6 @@ test/             GoogleTest 测试
 docs/             项目文档
 ```
 
-## 当前状态
-
-项目目前已经可以在 Linux 上完成 CMake 配置和编译。底层 Buffer Pool、Catalog 基础功能、B+ Tree、索引迭代器、记录系统、Disk Manager 和 Table Heap 已有测试覆盖。
-
-当前测试基线：
-
-```text
-总测试数：28
-通过：25
-跳过：1
-失败：3
-```
-
-当前失败项主要涉及 Lock Manager、Executor 和 Recovery Manager，相关功能仍在完善中。
-
 ## 构建与测试
 
 环境要求：

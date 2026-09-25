@@ -55,20 +55,18 @@ void LeafPage::SetNextPageId(page_id_t next_page_id) {
  * 二分查找
  */
 int LeafPage::KeyIndex(const GenericKey *key, const KeyManager &KM) {
-  int l, r, m;
-  l = 0;
-  r = GetSize() - 1; 
-  while (l <= r) {
-    m = (l + r) /2;
-    if (KM.CompareKeys(KeyAt(m), key) < 0) {
-        l = m + 1;
-    } else if (KM.CompareKeys(KeyAt(m), key) > 0){  
-        r = m - 1;
+  // 返回第一个大于等于 key 的位置，才能正确支持范围扫描的 Begin(key)。
+  int left = 0;
+  int right = GetSize();
+  while (left < right) {
+    int middle = left + (right - left) / 2;
+    if (KM.CompareKeys(KeyAt(middle), key) < 0) {
+      left = middle + 1;
     } else {
-      return m;
+      right = middle;
     }
   }
-  return r;
+  return left;
 }
 
 /*

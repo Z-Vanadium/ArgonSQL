@@ -4,11 +4,11 @@
  * TODO: Student Implement
  */
 bool TableHeap::InsertTuple(Row &row, Txn *txn) {
-  if(row.GetSerializedSize(schema_) >= PAGE_SIZE) {
+  if (schema_ == nullptr || row.GetSerializedSize(schema_) > TablePage::SIZE_MAX_ROW) {
     return false;
   }
-  int cur_id = first_page_id_;
-  int prev_id = first_page_id_;
+  page_id_t cur_id = first_page_id_;
+  page_id_t prev_id = INVALID_PAGE_ID;
   while(cur_id != INVALID_PAGE_ID) {
     auto page = reinterpret_cast<TablePage *>(buffer_pool_manager_->FetchPage(cur_id));
     if(page == nullptr) {
@@ -26,12 +26,22 @@ bool TableHeap::InsertTuple(Row &row, Txn *txn) {
 
   page_id_t new_id;
   auto page = reinterpret_cast<TablePage*>(buffer_pool_manager_->NewPage(new_id));
+  if (page == nullptr) {
+    return false;
+  }
   page->Init(new_id, prev_id, log_manager_, txn);
-  page->InsertTuple(row, schema_, txn, lock_manager_, log_manager_);
+  bool inserted = page->InsertTuple(row, schema_, txn, lock_manager_, log_manager_);
 
-  buffer_pool_manager_->UnpinPage(new_id, true);
+  buffer_pool_manager_->UnpinPage(new_id, inserted);
+  if (!inserted) {
+    buffer_pool_manager_->DeletePage(new_id);
+    return false;
+  }
 
   auto pre_page = reinterpret_cast<TablePage*>(buffer_pool_manager_->FetchPage(prev_id));
+  if (pre_page == nullptr) {
+    return false;
+  }
   pre_page->SetNextPageId(new_id);
 
   buffer_pool_manager_->UnpinPage(prev_id, true);
@@ -47,10 +57,10 @@ bool TableHeap::MarkDelete(const RowId &rid, Txn *txn) {
   }
   // Otherwise, mark the tuple as deleted.
   page->WLatch();
-  page->MarkDelete(rid, txn, lock_manager_, log_manager_);
+  bool marked = page->MarkDelete(rid, txn, lock_manager_, log_manager_);
   page->WUnlatch();
-  buffer_pool_manager_->UnpinPage(page->GetTablePageId(), true);
-  return true;
+  buffer_pool_manager_->UnpinPage(page->GetTablePageId(), marked);
+  return marked;
 }
 
 /**
@@ -105,10 +115,16 @@ void TableHeap::RollbackDelete(const RowId &rid, Txn *txn) {
  * TODO: Student Implement
  */
 bool TableHeap::GetTuple(Row *row, Txn *txn) {
+  if (row == nullptr) {
+    return false;
+  }
   auto page = reinterpret_cast<TablePage *>(buffer_pool_manager_->FetchPage(row->GetRowId().GetPageId()));
   if (page == nullptr) {
     return false;
   }
+  // 迭代器会复用同一个 Row 对象。反序列化前必须清空旧字段，
+  // 否则 Row::DeserializeFrom 会把旧字段误认为是非法的非空目标。
+  row->destroy();
   if(page->GetTuple(row, schema_, txn, lock_manager_)) {
     buffer_pool_manager_->UnpinPage(row->GetRowId().GetPageId(), false);
     return true;
@@ -141,15 +157,19 @@ TableIterator TableHeap::Begin(Txn *txn) {
     auto page = reinterpret_cast<TablePage *>(buffer_pool_manager_->FetchPage(cur_page));
     RowId first_rid;
 
+    page_id_t next_page = page->GetNextPageId();
     if(page->GetFirstTupleRid(&first_rid)){
-      Row* first_row = new Row(first_rid);
-      page->GetTuple(first_row, schema_, txn, lock_manager_);
+      Row first_row(first_rid);
+      bool found = page->GetTuple(&first_row, schema_, txn, lock_manager_);
       buffer_pool_manager_->UnpinPage(cur_page, false);
-      return TableIterator(this, *first_row, txn);
+      if (found) {
+        return TableIterator(this, first_row, txn);
+      }
+    } else {
+      buffer_pool_manager_->UnpinPage(cur_page, false);
     }
 
-    buffer_pool_manager_->UnpinPage(cur_page,false);
-    cur_page = page->GetNextPageId();
+    cur_page = next_page;
   }
   return End();
 }

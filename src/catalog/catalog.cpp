@@ -85,10 +85,14 @@ CatalogManager::CatalogManager(BufferPoolManager *buffer_pool_manager, LockManag
 
         // 加载所有表和索引
         for (auto const& [table_id, page_id] : catalog_meta_->table_meta_pages_) {
-            LoadTable(table_id, page_id);
+            if (page_id != INVALID_PAGE_ID) {
+                LoadTable(table_id, page_id);
+            }
         }
         for (auto const& [index_id, page_id] : catalog_meta_->index_meta_pages_) {
-            LoadIndex(index_id, page_id);
+            if (page_id != INVALID_PAGE_ID) {
+                LoadIndex(index_id, page_id);
+            }
         }
 
         // 设置下一个可用的ID
@@ -118,16 +122,24 @@ dberr_t CatalogManager::CreateTable(const string &table_name, TableSchema *schem
         return DB_TABLE_ALREADY_EXIST;
     }
 
-    // 1. 创建TableHeap并获取其根页面ID
+    // 1. 目录必须拥有一份独立的 Schema。
+    // TableHeap 会长期保存 Schema 指针，不能直接保存调用者的临时对象。
+    TableSchema *new_schema = TableSchema::DeepCopySchema(schema);
+    if (new_schema == nullptr) {
+        return DB_FAILED;
+    }
+
+    // 2. TableHeap 和 TableMetadata 共同使用这份由目录拥有的 Schema。
     page_id_t root_page_id;
-    TableHeap *table_heap = TableHeap::Create(buffer_pool_manager_, schema, txn, log_manager_, lock_manager_);
-    if(table_heap == nullptr) return DB_FAILED;
+    TableHeap *table_heap = TableHeap::Create(buffer_pool_manager_, new_schema, txn, log_manager_, lock_manager_);
+    if (table_heap == nullptr) {
+        delete new_schema;
+        return DB_FAILED;
+    }
     root_page_id = table_heap->GetFirstPageId();
 
-    // 2. 创建TableMetadata
+    // 3. 创建TableMetadata
     table_id_t table_id = next_table_id_++;
-    // 注意：这里需要深拷贝schema，因为传入的schema可能在函数外部被释放
-    TableSchema *new_schema = TableSchema::DeepCopySchema(schema);
     TableMetadata* table_meta = TableMetadata::Create(table_id, table_name, root_page_id, new_schema);
     
     // 3. 创建TableInfo
@@ -143,6 +155,7 @@ dberr_t CatalogManager::CreateTable(const string &table_name, TableSchema *schem
     Page *page = buffer_pool_manager_->NewPage(meta_page_id);
     if(page == nullptr) {
         // 清理已创建的资源
+        table_heap->FreeTableHeap();
         delete table_info;
         tables_.erase(table_id);
         table_names_.erase(table_name);
@@ -223,6 +236,7 @@ dberr_t CatalogManager::CreateIndex(const std::string &table_name, const string 
     Page *page = buffer_pool_manager_->NewPage(meta_page_id);
     if(page == nullptr) {
         // 清理
+        delete index_info;
         indexes_.erase(index_id);
         index_names_[table_name].erase(index_name);
         return DB_FAILED;

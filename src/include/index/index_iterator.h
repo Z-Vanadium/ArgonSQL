@@ -12,6 +12,12 @@ class IndexIterator {
 
   explicit IndexIterator(page_id_t page_id, BufferPoolManager *bpm, int index = 0);
 
+  IndexIterator(const IndexIterator &other);
+  IndexIterator(IndexIterator &&other) noexcept;
+
+  IndexIterator &operator=(const IndexIterator &other);
+  IndexIterator &operator=(IndexIterator &&other) noexcept;
+
   ~IndexIterator();
 
   /** Return the key/value pair this iterator is currently pointing at. */
