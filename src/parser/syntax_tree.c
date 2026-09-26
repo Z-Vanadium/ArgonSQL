@@ -2,10 +2,10 @@
 
 #include <stdio.h>
 
-extern int minisql_parser_line_no_;
-extern int minisql_parser_column_no_;
-extern int minisql_parser_debug_node_count_;
-extern pSyntaxNodeList minisql_parser_syntax_node_list_;
+extern __thread int minisql_parser_line_no_;
+extern __thread int minisql_parser_column_no_;
+extern __thread int minisql_parser_debug_node_count_;
+extern __thread pSyntaxNodeList minisql_parser_syntax_node_list_;
 
 pSyntaxNode CreateSyntaxNode(SyntaxNodeType type, char *val) {
   pSyntaxNode node = (pSyntaxNode)malloc(sizeof(struct SyntaxNode));

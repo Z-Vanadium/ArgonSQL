@@ -5,6 +5,11 @@
 #include <sys/types.h>
 
 #include <chrono>
+#include <fstream>
+#include <iostream>
+#include <mutex>
+#include <sstream>
+#include <utility>
 
 #include "common/result_writer.h"
 #include "executor/executors/delete_executor.h"
@@ -15,6 +20,7 @@
 #include "executor/executors/values_executor.h"
 #include "glog/logging.h"
 #include "planner/planner.h"
+#include "executor/session_context.h"
 #include "utils/utils.h"
 
 extern "C" {
@@ -23,6 +29,76 @@ int yyparse(void);
 #include "parser/parser.h"
 }
 
+namespace {
+constexpr uint32_t kCatalogMetadataMagic = 89849;
+constexpr uint32_t kObjectMetadataMagic = 344528;
+
+// ExecuteEngine 的旧执行函数签名没有携带会话和输出流。把这两个值放在
+// worker 线程的请求上下文中，可以保留旧执行器接口，同时避免修改所有
+// executor/planner 的调用链。每个 TCP 请求都在一个线程内完成，因此不会
+// 与其它连接串写输出或 USE DATABASE 状态。
+thread_local SessionContext *g_active_session = nullptr;
+thread_local std::ostream *g_active_output = nullptr;
+
+bool HasValidCatalogMetadata(const std::string &database_path) {
+  // DiskManager 的物理布局是：元数据页(0)、位图页(1)、Catalog 元数据页(2)。
+  // 先检查 Catalog 魔数，再交给 DBStorageEngine 打开，避免把普通测试文件
+  // 或损坏文件误判为数据库而触发 CatalogMeta 的断言。
+  std::ifstream database_file(database_path, std::ios::binary);
+  if (!database_file) {
+    return false;
+  }
+  const auto read_uint32 = [&database_file](std::streamoff offset, uint32_t *value) {
+    database_file.seekg(offset);
+    if (!database_file) {
+      return false;
+    }
+    database_file.read(reinterpret_cast<char *>(value), sizeof(*value));
+    return database_file.gcount() == static_cast<std::streamsize>(sizeof(*value));
+  };
+
+  uint32_t magic = 0;
+  if (!read_uint32(static_cast<std::streamoff>(2) * PAGE_SIZE, &magic) || magic != kCatalogMetadataMagic) {
+    return false;
+  }
+
+  // CatalogMeta 后面依次保存 table_meta_pages_ 和 index_meta_pages_。
+  // 除了 Catalog 自身，还检查每个引用的元数据页，避免加载“Catalog
+  // 已落盘但表元数据仍未落盘”的半成品数据库。
+  uint32_t table_count = 0;
+  uint32_t index_count = 0;
+  if (!read_uint32(static_cast<std::streamoff>(2) * PAGE_SIZE + 4, &table_count) ||
+      !read_uint32(static_cast<std::streamoff>(2) * PAGE_SIZE + 8, &index_count)) {
+    return false;
+  }
+  if (table_count > PAGE_SIZE / 8 || index_count > PAGE_SIZE / 8 ||
+      table_count + index_count > (PAGE_SIZE - 12) / 8) {
+    return false;
+  }
+
+  std::streamoff metadata_offset = static_cast<std::streamoff>(2) * PAGE_SIZE + 12;
+  for (uint32_t i = 0; i < table_count + index_count; ++i) {
+    uint32_t object_id = 0;
+    uint32_t logical_page_id = 0;
+    if (!read_uint32(metadata_offset, &object_id) || !read_uint32(metadata_offset + 4, &logical_page_id)) {
+      return false;
+    }
+    (void)object_id;
+    metadata_offset += 8;
+
+    const uint32_t extent_id = logical_page_id / DiskManager::BITMAP_SIZE;
+    const uint32_t page_offset = logical_page_id % DiskManager::BITMAP_SIZE;
+    const std::streamoff physical_page =
+        1 + static_cast<std::streamoff>(extent_id) * (DiskManager::BITMAP_SIZE + 1) + 1 + page_offset;
+    uint32_t object_magic = 0;
+    if (!read_uint32(physical_page * PAGE_SIZE, &object_magic) || object_magic != kObjectMetadataMagic) {
+      return false;
+    }
+  }
+  return true;
+}
+}  // namespace
+
 ExecuteEngine::ExecuteEngine() {
   char path[] = "./databases";
   DIR *dir;
@@ -30,19 +106,99 @@ ExecuteEngine::ExecuteEngine() {
     mkdir("./databases", 0777);
     dir = opendir(path);
   }
-  /** When you have completed all the code for
-   *  the test, run it using main.cpp and uncomment
-   *  this part of the code.
-  struct dirent *stdir;
-  while((stdir = readdir(dir)) != nullptr) {
-    if( strcmp( stdir->d_name , "." ) == 0 ||
-        strcmp( stdir->d_name , "..") == 0 ||
-        stdir->d_name[0] == '.')
-      continue;
-    dbs_[stdir->d_name] = new DBStorageEngine(stdir->d_name, false);
+  if (dir == nullptr) {
+    throw std::runtime_error("Failed to open database directory.");
   }
-   **/
+
+  // ExecuteEngine 的 dbs_ 只保存当前进程打开的数据库对象。Server 重启后
+  // 这些对象会被销毁，因此启动时必须重新扫描 databases/，按照磁盘文件
+  // 重新构造 DBStorageEngine，才能让 SHOW/USE 找回之前创建的数据库。
+  struct dirent *entry;
+  while ((entry = readdir(dir)) != nullptr) {
+    const std::string database_name = entry->d_name;
+    if (database_name == "." || database_name == ".." || database_name.front() == '.') {
+      continue;
+    }
+
+    // 只加载普通数据库文件，忽略目录、临时文件和其他特殊文件，避免
+    // 把测试产物或目录误当作数据库打开。
+    const std::string database_path = std::string(path) + "/" + database_name;
+    struct stat file_status {};
+    if (stat(database_path.c_str(), &file_status) != 0 || !S_ISREG(file_status.st_mode)) {
+      continue;
+    }
+    if (!HasValidCatalogMetadata(database_path)) {
+      LOG(WARNING) << "Skipping non-ArgonSQL database file: " << database_path;
+      continue;
+    }
+
+    try {
+      dbs_.emplace(database_name, new DBStorageEngine(database_name, false));
+    } catch (const std::exception &ex) {
+      // 单个数据库损坏时记录错误并继续启动，避免一个坏文件阻塞整个
+      // Server；后续可以增加 CHECK/REPAIR 命令处理该数据库。
+      LOG(ERROR) << "Failed to load database " << database_name << ": " << ex.what();
+    }
+  }
   closedir(dir);
+}
+
+ExecuteResult ExecuteEngine::Execute(pSyntaxNode ast, SessionContext *session) {
+  ExecuteResult result;
+  std::ostringstream output;
+
+  // 通过线程局部请求状态把输出和当前数据库传给旧执行路径；不再修改
+  // 进程级 std::cout，也不再把某个会话的数据库写入共享 current_db_。
+  SessionContext *previous_session = g_active_session;
+  std::ostream *previous_output = g_active_output;
+  g_active_session = session;
+  g_active_output = &output;
+
+  // 只读查询可以共享访问数据库注册表；会改变 Catalog、Buffer Pool 或
+  // 数据库生命周期的请求使用排他锁。这里的锁覆盖一次完整 SQL，保证
+  // 同一数据库上的 DDL/DML 不与其它请求交错。
+  std::unique_ptr<std::shared_lock<std::shared_mutex>> read_lock;
+  std::unique_ptr<std::unique_lock<std::shared_mutex>> write_lock;
+  const bool read_only = ast != nullptr &&
+                         (ast->type_ == kNodeShowDB || ast->type_ == kNodeUseDB ||
+                          ast->type_ == kNodeShowTables || ast->type_ == kNodeShowIndexes ||
+                          ast->type_ == kNodeSelect);
+  if (read_only) {
+    read_lock = std::make_unique<std::shared_lock<std::shared_mutex>>(dbs_latch_);
+  } else {
+    write_lock = std::make_unique<std::unique_lock<std::shared_mutex>>(dbs_latch_);
+  }
+
+  try {
+    result.status = Execute(ast);
+    // 一些旧命令（例如 QUIT 或错误状态）通过 ExecuteInformation 输出
+    // 附加提示；此时输出仍被重定向，因此也会进入 result.output。
+    ExecuteInformation(result.status);
+  } catch (const std::exception &ex) {
+    result.status = DB_FAILED;
+    Output() << "Error Encountered in ExecuteEngine: " << ex.what() << std::endl;
+  }
+
+  g_active_session = previous_session;
+  g_active_output = previous_output;
+  result.output = output.str();
+  return result;
+}
+
+std::ostream &ExecuteEngine::Output() {
+  return g_active_output == nullptr ? std::cout : *g_active_output;
+}
+
+const std::string &ExecuteEngine::CurrentDatabase() const {
+  return g_active_session == nullptr ? current_db_ : g_active_session->GetCurrentDatabase();
+}
+
+void ExecuteEngine::SetCurrentDatabase(std::string database) {
+  if (g_active_session == nullptr) {
+    current_db_ = std::move(database);
+  } else {
+    g_active_session->SetCurrentDatabase(std::move(database));
+  }
 }
 
 std::unique_ptr<AbstractExecutor> ExecuteEngine::CreateExecutor(ExecuteContext *exec_ctx,
@@ -96,7 +252,7 @@ dberr_t ExecuteEngine::ExecutePlan(const AbstractPlanNodeRef &plan, std::vector<
       }
     }
   } catch (const exception &ex) {
-    std::cout << "Error Encountered in Executor Execution: " << ex.what() << std::endl;
+    Output() << "Error Encountered in Executor Execution: " << ex.what() << std::endl;
     if (result_set != nullptr) {
       result_set->clear();
     }
@@ -111,7 +267,7 @@ dberr_t ExecuteEngine::Execute(pSyntaxNode ast) {
   }
   auto start_time = std::chrono::system_clock::now();
   unique_ptr<ExecuteContext> context(nullptr);
-  if (!current_db_.empty()) context = dbs_[current_db_]->MakeExecuteContext(nullptr);
+  if (!CurrentDatabase().empty()) context = dbs_.at(CurrentDatabase())->MakeExecuteContext(nullptr);
   switch (ast->type_) {
     case kNodeCreateDB:
       return ExecuteCreateDatabase(ast, context.get());
@@ -154,7 +310,7 @@ dberr_t ExecuteEngine::Execute(pSyntaxNode ast) {
     // Execute the query.
     ExecutePlan(planner.plan_, &result_set, nullptr, context.get());
   } catch (const exception &ex) {
-    std::cout << "Error Encountered in Planner: " << ex.what() << std::endl;
+    Output() << "Error Encountered in Planner: " << ex.what() << std::endl;
     return DB_FAILED;
   }
   auto stop_time = std::chrono::system_clock::now();
@@ -204,7 +360,7 @@ dberr_t ExecuteEngine::Execute(pSyntaxNode ast) {
   } else {
     writer.EndInformation(result_set.size(), duration_time, false);
   }
-  std::cout << writer.stream_.rdbuf();
+  Output() << writer.stream_.rdbuf();
   // todo:: use shared_ptr for schema
   if (ast->type_ == kNodeSelect)
       delete planner.plan_->OutputSchema();
@@ -214,31 +370,31 @@ dberr_t ExecuteEngine::Execute(pSyntaxNode ast) {
 void ExecuteEngine::ExecuteInformation(dberr_t result) {
   switch (result) {
     case DB_ALREADY_EXIST:
-      cout << "Database already exists." << endl;
+      Output() << "Database already exists." << std::endl;
       break;
     case DB_NOT_EXIST:
-      cout << "Database not exists." << endl;
+      Output() << "Database not exists." << std::endl;
       break;
     case DB_TABLE_ALREADY_EXIST:
-      cout << "Table already exists." << endl;
+      Output() << "Table already exists." << std::endl;
       break;
     case DB_TABLE_NOT_EXIST:
-      cout << "Table not exists." << endl;
+      Output() << "Table not exists." << std::endl;
       break;
     case DB_INDEX_ALREADY_EXIST:
-      cout << "Index already exists." << endl;
+      Output() << "Index already exists." << std::endl;
       break;
     case DB_INDEX_NOT_FOUND:
-      cout << "Index not exists." << endl;
+      Output() << "Index not exists." << std::endl;
       break;
     case DB_COLUMN_NAME_NOT_EXIST:
-      cout << "Column not exists." << endl;
+      Output() << "Column not exists." << std::endl;
       break;
     case DB_KEY_NOT_FOUND:
-      cout << "Key not exists." << endl;
+      Output() << "Key not exists." << std::endl;
       break;
     case DB_QUIT:
-      cout << "Bye." << endl;
+      Output() << "Bye." << std::endl;
       break;
     default:
       break;
@@ -268,8 +424,7 @@ dberr_t ExecuteEngine::ExecuteDropDatabase(pSyntaxNode ast, ExecuteContext *cont
   remove(("./databases/" + db_name).c_str());
   delete dbs_[db_name];
   dbs_.erase(db_name);
-  if (db_name == current_db_)
-    current_db_ = "";
+  if (db_name == CurrentDatabase()) SetCurrentDatabase("");
   return DB_SUCCESS;
 }
 
@@ -278,23 +433,23 @@ dberr_t ExecuteEngine::ExecuteShowDatabases(pSyntaxNode ast, ExecuteContext *con
   LOG(INFO) << "ExecuteShowDatabases" << std::endl;
 #endif
   if (dbs_.empty()) {
-    cout << "Empty set (0.00 sec)" << endl;
+    Output() << "Empty set (0.00 sec)" << std::endl;
     return DB_SUCCESS;
   }
   int max_width = 8;
   for (const auto &itr : dbs_) {
     if (itr.first.length() > max_width) max_width = itr.first.length();
   }
-  cout << "+" << setfill('-') << setw(max_width + 2) << ""
+  Output() << "+" << setfill('-') << setw(max_width + 2) << ""
        << "+" << endl;
-  cout << "| " << std::left << setfill(' ') << setw(max_width) << "Database"
+  Output() << "| " << std::left << setfill(' ') << setw(max_width) << "Database"
        << " |" << endl;
-  cout << "+" << setfill('-') << setw(max_width + 2) << ""
+  Output() << "+" << setfill('-') << setw(max_width + 2) << ""
        << "+" << endl;
   for (const auto &itr : dbs_) {
-    cout << "| " << std::left << setfill(' ') << setw(max_width) << itr.first << " |" << endl;
+    Output() << "| " << std::left << setfill(' ') << setw(max_width) << itr.first << " |" << std::endl;
   }
-  cout << "+" << setfill('-') << setw(max_width + 2) << ""
+  Output() << "+" << setfill('-') << setw(max_width + 2) << ""
        << "+" << endl;
   return DB_SUCCESS;
 }
@@ -305,8 +460,8 @@ dberr_t ExecuteEngine::ExecuteUseDatabase(pSyntaxNode ast, ExecuteContext *conte
 #endif
   string db_name = ast->child_->val_;
   if (dbs_.find(db_name) != dbs_.end()) {
-    current_db_ = db_name;
-    cout << "Database changed" << endl;
+    SetCurrentDatabase(db_name);
+    Output() << "Database changed" << std::endl;
     return DB_SUCCESS;
   }
   return DB_NOT_EXIST;
@@ -316,29 +471,29 @@ dberr_t ExecuteEngine::ExecuteShowTables(pSyntaxNode ast, ExecuteContext *contex
 #ifdef ENABLE_EXECUTE_DEBUG
   LOG(INFO) << "ExecuteShowTables" << std::endl;
 #endif
-  if (current_db_.empty()) {
-    cout << "No database selected" << endl;
+  if (CurrentDatabase().empty()) {
+    Output() << "No database selected" << std::endl;
     return DB_FAILED;
   }
   vector<TableInfo *> tables;
-  if (dbs_[current_db_]->catalog_mgr_->GetTables(tables) == DB_FAILED) {
-    cout << "Empty set (0.00 sec)" << endl;
+  if (dbs_.at(CurrentDatabase())->catalog_mgr_->GetTables(tables) == DB_FAILED) {
+    Output() << "Empty set (0.00 sec)" << std::endl;
     return DB_FAILED;
   }
-  string table_in_db("Tables_in_" + current_db_);
+  string table_in_db("Tables_in_" + CurrentDatabase());
   uint max_width = table_in_db.length();
   for (const auto &itr : tables) {
     if (itr->GetTableName().length() > max_width) max_width = itr->GetTableName().length();
   }
-  cout << "+" << setfill('-') << setw(max_width + 2) << ""
+  Output() << "+" << setfill('-') << setw(max_width + 2) << ""
        << "+" << endl;
-  cout << "| " << std::left << setfill(' ') << setw(max_width) << table_in_db << " |" << endl;
-  cout << "+" << setfill('-') << setw(max_width + 2) << ""
+  Output() << "| " << std::left << setfill(' ') << setw(max_width) << table_in_db << " |" << std::endl;
+  Output() << "+" << setfill('-') << setw(max_width + 2) << ""
        << "+" << endl;
   for (const auto &itr : tables) {
-    cout << "| " << std::left << setfill(' ') << setw(max_width) << itr->GetTableName() << " |" << endl;
+    Output() << "| " << std::left << setfill(' ') << setw(max_width) << itr->GetTableName() << " |" << std::endl;
   }
-  cout << "+" << setfill('-') << setw(max_width + 2) << ""
+  Output() << "+" << setfill('-') << setw(max_width + 2) << ""
        << "+" << endl;
   return DB_SUCCESS;
 }
@@ -378,8 +533,8 @@ dberr_t ExecuteEngine::ExecuteDropTable(pSyntaxNode ast, ExecuteContext *context
     remove(remove_path);
     delete dbs_[db_name];
     dbs_.erase(db_name);
-    if(db_name == current_db_){
-      current_db_ = "";
+    if(db_name == CurrentDatabase()){
+      SetCurrentDatabase("");
     }
     return DB_SUCCESS;
   }
@@ -393,7 +548,7 @@ dberr_t ExecuteEngine::ExecuteShowIndexes(pSyntaxNode ast, ExecuteContext *conte
   LOG(INFO) << "ExecuteShowIndexes" << std::endl;
 #endif
   if (dbs_.empty()) {
-    cout << "Empty set (0.00 sec)" << endl;
+    Output() << "Empty set (0.00 sec)" << std::endl;
     return DB_SUCCESS;
   }
   int max_width = 8;
@@ -402,16 +557,16 @@ dberr_t ExecuteEngine::ExecuteShowIndexes(pSyntaxNode ast, ExecuteContext *conte
       max_width = itr.first.length();
     }
   }
-  cout << "+" << setfill('-') << setw(max_width + 2) << ""
+  Output() << "+" << setfill('-') << setw(max_width + 2) << ""
        << "+" << endl;
-  cout << "| " << std::left << setfill(' ') << setw(max_width) << "Database"
+  Output() << "| " << std::left << setfill(' ') << setw(max_width) << "Database"
        << " |" << endl;
-  cout << "+" << setfill('-') << setw(max_width + 2) << ""
+  Output() << "+" << setfill('-') << setw(max_width + 2) << ""
        << "+" << endl;
   for (const auto &itr : dbs_) {
-    cout << "| " << std::left << setfill(' ') << setw(max_width) << itr.first << " |" << endl;
+    Output() << "| " << std::left << setfill(' ') << setw(max_width) << itr.first << " |" << std::endl;
   }
-  cout << "+" << setfill('-') << setw(max_width + 2) << ""
+  Output() << "+" << setfill('-') << setw(max_width + 2) << ""
        << "+" << endl;
   return DB_SUCCESS;
 
@@ -424,14 +579,14 @@ dberr_t ExecuteEngine::ExecuteCreateIndex(pSyntaxNode ast, ExecuteContext *conte
 #ifdef ENABLE_EXECUTE_DEBUG
   LOG(INFO) << "ExecuteCreateIndex" << std::endl;
 #endif
-  if(current_db_.empty()){
-      cout << "No database selected" << endl;
+  if(CurrentDatabase().empty()){
+      Output() << "No database selected" << std::endl;
       return DB_NOT_EXIST;
   }
   else{
     std::vector<TableInfo*> tables;
     TableInfo* table_info = nullptr;
-    dbs_[current_db_]->catalog_mgr_->GetTables(tables);
+    dbs_.at(CurrentDatabase())->catalog_mgr_->GetTables(tables);
 
     auto table_name = ast->child_->next_->val_;
     bool table_is_exist = false;
@@ -444,16 +599,16 @@ dberr_t ExecuteEngine::ExecuteCreateIndex(pSyntaxNode ast, ExecuteContext *conte
     }
     
     if (!table_is_exist) {
-      cout << "Table not exists." << endl;
+      Output() << "Table not exists." << std::endl;
       return DB_TABLE_NOT_EXIST;
     }
 
     auto index_name = ast->child_->val_;
     std::vector<IndexInfo*> indexs;
-    dbs_[current_db_]->catalog_mgr_->GetTableIndexes(table_name, indexs);
+    dbs_.at(CurrentDatabase())->catalog_mgr_->GetTableIndexes(table_name, indexs);
     for (const auto &index:indexs) {
       if (index->GetIndexName() == index_name) {
-        cout << "Index " << index_name << " already exists in " << table_name << endl;
+        Output() << "Index " << index_name << " already exists in " << table_name << std::endl;
         return DB_INDEX_ALREADY_EXIST;
       }
     }
@@ -477,7 +632,7 @@ dberr_t ExecuteEngine::ExecuteCreateIndex(pSyntaxNode ast, ExecuteContext *conte
 
     Txn txn;
     IndexInfo* index_info = nullptr;
-    auto status = dbs_[current_db_]->catalog_mgr_->CreateIndex(table_name, index_name, column_names, &txn, index_info, index_type);
+    auto status = dbs_.at(CurrentDatabase())->catalog_mgr_->CreateIndex(table_name, index_name, column_names, &txn, index_info, index_type);
     if(status != DB_SUCCESS){
       return DB_SUCCESS;
     }
@@ -495,7 +650,7 @@ dberr_t ExecuteEngine::ExecuteCreateIndex(pSyntaxNode ast, ExecuteContext *conte
       index_info->GetIndex()->InsertEntry(index_row, row.GetRowId(), nullptr);
     }
 
-    cout << "Query OK, 0 rows affected" << endl;
+    Output() << "Query OK, 0 rows affected" << std::endl;
     return DB_SUCCESS;
   }
   
@@ -508,30 +663,30 @@ dberr_t ExecuteEngine::ExecuteDropIndex(pSyntaxNode ast, ExecuteContext *context
 #ifdef ENABLE_EXECUTE_DEBUG
   LOG(INFO) << "ExecuteDropIndex" << std::endl;
 #endif
-  if(current_db_.empty()){
-    cout<<"No database selected"<<endl;
+  if(CurrentDatabase().empty()){
+    Output()<<"No database selected"<<std::endl;
     return DB_NOT_EXIST;
   }
   else{
     std::vector<TableInfo*> tables;
     TableInfo* table_info = nullptr;
-    dbs_[current_db_]->catalog_mgr_->GetTables(tables);
+    dbs_.at(CurrentDatabase())->catalog_mgr_->GetTables(tables);
     auto index_name = ast->child_->val_;
     bool index_is_exist = false;
 
     for(const auto &table:tables){
-      auto is_db_success=dbs_[current_db_]->catalog_mgr_->DropIndex(table->GetTableName(), index_name);
+      auto is_db_success=dbs_.at(CurrentDatabase())->catalog_mgr_->DropIndex(table->GetTableName(), index_name);
       if(is_db_success == DB_SUCCESS){
         index_is_exist = true;
       }
     }
     
     if(index_is_exist){
-      cout << "Index dropped successfully" << endl;
+      Output() << "Index dropped successfully" << std::endl;
       return DB_SUCCESS;
     }
     else{
-      cout << "Index not found" << endl;
+      Output() << "Index not found" << std::endl;
       return DB_FAILED;
     }
   }
@@ -571,7 +726,7 @@ dberr_t ExecuteEngine::ExecuteExecfile(pSyntaxNode ast, ExecuteContext *context)
   ifstream sql_file(file_name, ios::in);
   
   if (!sql_file.is_open()) {
-    cout << "Failed to open file: " << file_name << endl;
+    Output() << "Failed to open file: " << file_name << std::endl;
     return DB_FAILED;
   }
 
@@ -597,7 +752,7 @@ dberr_t ExecuteEngine::ExecuteExecfile(pSyntaxNode ast, ExecuteContext *context)
 
 
       if (MinisqlParserGetError()) {
-        cout << "SQL Error: " << MinisqlParserGetErrorMessage() << endl;
+        Output() << "SQL Error: " << MinisqlParserGetErrorMessage() << std::endl;
         MinisqlParserFinish();
         yy_delete_buffer(buffer);
         yylex_destroy();
@@ -622,7 +777,7 @@ dberr_t ExecuteEngine::ExecuteExecfile(pSyntaxNode ast, ExecuteContext *context)
   
   auto end_time = std::chrono::system_clock::now();
   double duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count() / 1000.0;
-  cout << "Query OK. (" << duration << " sec)" << endl;
+  Output() << "Query OK. (" << duration << " sec)" << std::endl;
   sql_file.close();
   return DB_SUCCESS;
 }

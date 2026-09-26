@@ -159,9 +159,9 @@ typedef struct yy_buffer_state *YY_BUFFER_STATE;
 typedef size_t yy_size_t;
 #endif
 
-extern yy_size_t yyleng;
+extern __thread yy_size_t yyleng;
 
-extern FILE *yyin, *yyout;
+extern __thread FILE *yyin, *yyout;
 
 #define EOB_ACT_CONTINUE_SCAN 0
 #define EOB_ACT_END_OF_FILE 1
@@ -264,9 +264,9 @@ struct yy_buffer_state
 #endif /* !YY_STRUCT_YY_BUFFER_STATE */
 
 /* Stack of input buffers. */
-static size_t yy_buffer_stack_top = 0; /**< index of top of stack. */
-static size_t yy_buffer_stack_max = 0; /**< capacity of stack. */
-static YY_BUFFER_STATE * yy_buffer_stack = 0; /**< Stack as an array. */
+static __thread size_t yy_buffer_stack_top = 0; /**< index of top of stack. */
+static __thread size_t yy_buffer_stack_max = 0; /**< capacity of stack. */
+static __thread YY_BUFFER_STATE * yy_buffer_stack = 0; /**< Stack as an array. */
 
 /* We provide macros for accessing buffer states in case in the
  * future we want to put the buffer states in a more general
@@ -284,19 +284,19 @@ static YY_BUFFER_STATE * yy_buffer_stack = 0; /**< Stack as an array. */
 #define YY_CURRENT_BUFFER_LVALUE (yy_buffer_stack)[(yy_buffer_stack_top)]
 
 /* yy_hold_char holds the character lost when yytext is formed. */
-static char yy_hold_char;
-static yy_size_t yy_n_chars;		/* number of characters read into yy_ch_buf */
-yy_size_t yyleng;
+static __thread char yy_hold_char;
+static __thread yy_size_t yy_n_chars;		/* number of characters read into yy_ch_buf */
+__thread yy_size_t yyleng;
 
 /* Points to current character in buffer. */
-static char *yy_c_buf_p = (char *) 0;
-static int yy_init = 0;		/* whether we need to initialize */
-static int yy_start = 0;	/* start state number */
+static __thread char *yy_c_buf_p = (char *) 0;
+static __thread int yy_init = 0;		/* whether we need to initialize */
+static __thread int yy_start = 0;	/* start state number */
 
 /* Flag which is used to allow yywrap()'s to do buffer switches
  * instead of setting up a fresh yyin.  A bit of a hack ...
  */
-static int yy_did_buffer_switch_on_eof;
+static __thread int yy_did_buffer_switch_on_eof;
 
 void yyrestart (FILE *input_file  );
 void yy_switch_to_buffer (YY_BUFFER_STATE new_buffer  );
@@ -348,15 +348,15 @@ void yyfree (void *  );
 
 typedef unsigned char YY_CHAR;
 
-FILE *yyin = (FILE *) 0, *yyout = (FILE *) 0;
+__thread FILE *yyin = (FILE *) 0, *yyout = (FILE *) 0;
 
 typedef int yy_state_type;
 
-extern int yylineno;
+extern __thread int yylineno;
 
-int yylineno = 1;
+__thread int yylineno = 1;
 
-extern char *yytext;
+extern __thread char *yytext;
 #define yytext_ptr yytext
 
 static yy_state_type yy_get_previous_state (void );
@@ -560,11 +560,11 @@ static yyconst flex_int32_t yy_rule_can_match_eol[57] =
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0,     };
 
-static yy_state_type yy_last_accepting_state;
-static char *yy_last_accepting_cpos;
+static __thread yy_state_type yy_last_accepting_state;
+static __thread char *yy_last_accepting_cpos;
 
-extern int yy_flex_debug;
-int yy_flex_debug = 0;
+extern __thread int yy_flex_debug;
+__thread int yy_flex_debug = 0;
 
 /* The intent behind this definition is that it'll catch
  * any uses of REJECT which flex missed.
@@ -573,7 +573,7 @@ int yy_flex_debug = 0;
 #define yymore() yymore_used_but_not_detected
 #define YY_MORE_ADJ 0
 #define YY_RESTORE_YY_MORE_OFFSET
-char *yytext;
+__thread char *yytext;
 #line 1 "minisql.l"
 #line 2 "minisql.l"
     #include <stdio.h>
@@ -581,7 +581,7 @@ char *yytext;
 
     #include "parser/minisql_yacc.h"
     int yywrap();
-    extern YYSTYPE yylval;
+    extern __thread YYSTYPE yylval;
 #line 585 "../../parser/minisql_lex.c"
 
 #define INITIAL 0

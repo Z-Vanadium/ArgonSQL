@@ -1,16 +1,14 @@
 #include "parser/parser.h"
 
-#include <stdio.h>
-
 #include "parser/syntax_tree.h"
 
-pSyntaxNode minisql_parser_root_node_ = NULL;
-pSyntaxNodeList minisql_parser_syntax_node_list_ = NULL;
-int minisql_parser_line_no_ = 0;
-int minisql_parser_column_no_ = 0;
-int minisql_parser_error_ = 0;
-char *minisql_parser_error_message_ = NULL;
-int minisql_parser_debug_node_count_ = 0;
+__thread pSyntaxNode minisql_parser_root_node_ = NULL;
+__thread pSyntaxNodeList minisql_parser_syntax_node_list_ = NULL;
+__thread int minisql_parser_line_no_ = 0;
+__thread int minisql_parser_column_no_ = 0;
+__thread int minisql_parser_error_ = 0;
+__thread char *minisql_parser_error_message_ = NULL;
+__thread int minisql_parser_debug_node_count_ = 0;
 
 void MinisqlParserMovePos(int line, char *text) {
   size_t i = 0;
@@ -40,8 +38,6 @@ void MinisqlParserSetError(char *msg) {
     return;
   }
   minisql_parser_error_ = 1;
-  printf("Minisql parse error at line %d, col %d, message: %s\n", minisql_parser_line_no_, minisql_parser_column_no_,
-         msg);
   minisql_parser_error_message_ = msg;
 }
 

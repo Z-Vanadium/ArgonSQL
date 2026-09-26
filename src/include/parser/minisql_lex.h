@@ -128,9 +128,9 @@ typedef struct yy_buffer_state *YY_BUFFER_STATE;
 typedef size_t yy_size_t;
 #endif
 
-extern yy_size_t yyleng;
+extern __thread yy_size_t yyleng;
 
-extern FILE *yyin, *yyout;
+extern __thread FILE *yyin, *yyout;
 
 #ifndef YY_STRUCT_YY_BUFFER_STATE
 #define YY_STRUCT_YY_BUFFER_STATE
@@ -199,9 +199,9 @@ void yyfree(void *);
 
 /* Begin user sect3 */
 
-extern int yylineno;
+extern __thread int yylineno;
 
-extern char *yytext;
+extern __thread char *yytext;
 #define yytext_ptr yytext
 
 #ifdef YY_HEADER_EXPORT_START_CONDITIONS

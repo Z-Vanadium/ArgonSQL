@@ -3,7 +3,7 @@
     #include "parser/parser.h"
     #include "parser/minisql_yacc.h"
     int yywrap();
-    extern YYSTYPE yylval;
+    extern __thread YYSTYPE yylval;
 %}
 
 %option yylineno

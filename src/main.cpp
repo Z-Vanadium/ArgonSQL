@@ -1,85 +1,51 @@
-#include <cstdio>
+#include <cstdint>
+#include <cstdlib>
+#include <cstddef>
+#include <iostream>
+#include <string>
 
-#include "executor/execute_engine.h"
-#include "glog/logging.h"
-#include "parser/syntax_tree_printer.h"
-#include "utils/tree_file_mgr.h"
+#include "server/tcp_server.h"
 
-extern "C" {
-int yyparse(void);
-FILE *yyin;
-#include "parser/minisql_lex.h"
-#include "parser/parser.h"
+namespace {
+void PrintUsage(const char *program) {
+  std::cerr << "Usage: " << program << " [--host IPv4] [--port PORT] [--workers N]\n";
 }
-
-void InitGoogleLog(char *argv) {
-  FLAGS_logtostderr = true;
-  FLAGS_colorlogtostderr = true;
-  google::InitGoogleLogging(argv);
-  // LOG(INFO) << "glog started!";
-}
-
-void InputCommand(char *input, const int len) {
-  memset(input, 0, len);
-  printf("minisql > ");
-  int i = 0;
-  char ch;
-  while ((ch = getchar()) != ';') {
-    input[i++] = ch;
-  }
-  input[i] = ch;  // ;
-  getchar();      // remove enter
-}
+}  // namespace
 
 int main(int argc, char **argv) {
-  InitGoogleLog(argv[0]);
-  // command buffer
-  const int buf_size = 1024;
-  char cmd[buf_size];
-  // executor engine
-  ExecuteEngine engine;
-  // for print syntax tree
-  TreeFileManagers syntax_tree_file_mgr("syntax_tree_");
-  uint32_t syntax_tree_id = 0;
+  // 默认只监听本机，避免未配置认证和加密时直接暴露到网络。
+  std::string host = "127.0.0.1";
+  uint16_t port = 6789;
+  size_t worker_count = 4;
 
-  while (1) {
-    // read from buffer
-    InputCommand(cmd, buf_size);
-    // create buffer for sql input
-    YY_BUFFER_STATE bp = yy_scan_string(cmd);
-    if (bp == nullptr) {
-      LOG(ERROR) << "Failed to create yy buffer state." << std::endl;
-      exit(1);
-    }
-    yy_switch_to_buffer(bp);
-
-    // init parser module
-    MinisqlParserInit();
-
-    // parse
-    yyparse();
-
-    // parse result handle
-    if (MinisqlParserGetError()) {
-      // error
-      printf("%s\n", MinisqlParserGetErrorMessage());
+  // Server 目前只需要两个配置项；非法参数直接打印使用说明并退出，
+  // 避免带着不确定的端口或地址启动。
+  for (int i = 1; i < argc; ++i) {
+    const std::string argument = argv[i];
+    if ((argument == "--host" || argument == "-h") && i + 1 < argc) {
+      host = argv[++i];
+    } else if ((argument == "--port" || argument == "-p") && i + 1 < argc) {
+      const long value = std::strtol(argv[++i], nullptr, 10);
+      if (value <= 0 || value > 65535) {
+        PrintUsage(argv[0]);
+        return 2;
+      }
+      port = static_cast<uint16_t>(value);
+    } else if (argument == "--workers" && i + 1 < argc) {
+      const long value = std::strtol(argv[++i], nullptr, 10);
+      if (value <= 0 || value > 128) {
+        PrintUsage(argv[0]);
+        return 2;
+      }
+      worker_count = static_cast<size_t>(value);
     } else {
-      SyntaxTreePrinter printer(MinisqlGetParserRootNode());
-      printer.PrintTree(syntax_tree_file_mgr[syntax_tree_id++]);
-    }
-
-    auto result = engine.Execute(MinisqlGetParserRootNode());
-
-    // clean memory after parse
-    MinisqlParserFinish();
-    yy_delete_buffer(bp);
-    yylex_destroy();
-
-    // quit condition
-    engine.ExecuteInformation(result);
-    if (result == DB_QUIT) {
-      break;
+      PrintUsage(argv[0]);
+      return 2;
     }
   }
-  return 0;
+
+  // TcpServer 的生命周期覆盖整个进程；Run 返回通常意味着监听失败
+  // 或服务被 Stop，返回值直接作为进程退出码。
+  TcpServer server(host, port, worker_count);
+  return server.Run();
 }

@@ -959,7 +959,7 @@ do {					\
 
 /* Nonzero means print parse trace.  It is left uninitialized so that
    multiple parsers can coexist.  */
-int yydebug;
+__thread int yydebug;
 #else /* !YYDEBUG */
 # define YYDPRINTF(Args)
 # define YY_SYMBOL_PRINT(Title, Type, Value, Location)
@@ -1248,13 +1248,13 @@ int yyparse ();
 
 
 /* The look-ahead symbol.  */
-int yychar;
+__thread int yychar;
 
 /* The semantic value of the look-ahead symbol.  */
-YYSTYPE yylval;
+__thread YYSTYPE yylval;
 
 /* Number of syntax errors so far.  */
-int yynerrs;
+__thread int yynerrs;
 
 
 
