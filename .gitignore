@@ -7,4 +7,4 @@ datas/
 cmake-build-debug/
 cmake-build-release/
 docs/
-databases/
+databases/*

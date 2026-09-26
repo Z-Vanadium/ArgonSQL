@@ -19,9 +19,9 @@ ArgonSQL 是一个基于 C++17 和 Linux 的多用户关系型数据库项目。
 ```text
 TCP Client
   ↓
-Connection / Session
+epoll Reactor / Connection
   ↓
-SQL Parser
+SQL Worker Pool
   ↓
 Planner
   ↓
@@ -51,6 +51,17 @@ test/             GoogleTest 测试
 docs/             项目文档
 ```
 
+## 客户端协议与连接
+
+Server 使用 `ARGONSQL/1` 长度前缀协议，客户端可以在一条持久 TCP 连接上连续发送多条 SQL。响应明确携带 `OK`、`ERROR` 或 `QUIT` 状态和 payload 字节长度，不依赖换行或连接关闭判断结果边界。
+
+```text
+ARGONSQL/1 REQUEST <bytes>\n<SQL>
+ARGONSQL/1 RESPONSE <OK|ERROR|QUIT> <bytes>\n<result>
+```
+
+每个连接拥有独立 Session；epoll Reactor 负责管理大量非阻塞连接，SQL 线程池只执行完整 SQL，不会被空闲连接占用。协议细节见 [docs/protocol.md](docs/protocol.md)。
+
 ## 构建与测试
 
 环境要求：
@@ -65,6 +76,14 @@ docs/             项目文档
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j2
 ctest --test-dir build --output-on-failure
+```
+
+启动 Server 后可使用命令行客户端：
+
+```bash
+./build/bin/argonsql_server --host 127.0.0.1 --port 6789 --workers 4
+./build/bin/argonsql_client --host 127.0.0.1 --port 6789
+./build/bin/argonsql_client --sql 'show databases;'
 ```
 
 ## 项目定位
