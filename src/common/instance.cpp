@@ -38,15 +38,24 @@ DBStorageEngine::DBStorageEngine(std::string db_name, bool init, uint32_t buffer
     ASSERT(!bpm_->IsPageFree(CATALOG_META_PAGE_ID), "Invalid catalog meta page.");
     ASSERT(!bpm_->IsPageFree(INDEX_ROOTS_PAGE_ID), "Invalid header page.");
   }
-  catalog_mgr_ = new CatalogManager(bpm_, nullptr, nullptr, init);
+  // LockManager、TxnManager 和 LogManager 属于一个数据库实例，而不是
+  // 一个客户端连接。这样多个 Session 可以共享同一套锁表和 WAL 文件。
+  lock_mgr_ = new LockManager();
+  txn_mgr_ = new TxnManager(lock_mgr_);
+  log_mgr_ = new LogManager(db_file_name_ + ".wal");
+  txn_mgr_->SetLogManager(log_mgr_);
+  catalog_mgr_ = new CatalogManager(bpm_, lock_mgr_, log_mgr_, init);
 }
 
 DBStorageEngine::~DBStorageEngine() {
   delete catalog_mgr_;
+  delete txn_mgr_;
+  delete lock_mgr_;
+  delete log_mgr_;
   delete bpm_;
   delete disk_mgr_;
 }
 
 std::unique_ptr<ExecuteContext> DBStorageEngine::MakeExecuteContext(Txn *txn) {
-  return std::make_unique<ExecuteContext>(txn, catalog_mgr_, bpm_);
+  return std::make_unique<ExecuteContext>(txn, catalog_mgr_, bpm_, lock_mgr_, log_mgr_, txn_mgr_);
 }

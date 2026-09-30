@@ -1,6 +1,7 @@
 #include "concurrency/lock_manager.h"
 
 #include <algorithm>
+#include <chrono>
 #include <functional>
 #include <iostream>
 #include <thread>
@@ -58,7 +59,12 @@ bool LockManager::LockShared(Txn *txn, const RowId &rid) {
             if(txn->GetState() == TxnState::kAborted){
                 throw TxnAbortException(txn->GetTxnId(), AbortReason::kDeadlock);
             }
+            const auto wait_begin = std::chrono::steady_clock::now();
             req_q.cv_.wait(lock);
+            wait_count_.fetch_add(1, std::memory_order_relaxed);
+            wait_nanoseconds_.fetch_add(static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - wait_begin).count()),
+                std::memory_order_relaxed);
         }
     } catch (...) {
         // CheckAbort 可能在请求仍位于队列中时抛出异常。
@@ -128,7 +134,12 @@ bool LockManager::LockExclusive(Txn *txn, const RowId &rid) {
     try {
         while(is_blocked()){
             CheckAbort(txn, req_q);
+            const auto wait_begin = std::chrono::steady_clock::now();
             req_q.cv_.wait(lock);
+            wait_count_.fetch_add(1, std::memory_order_relaxed);
+            wait_nanoseconds_.fetch_add(static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - wait_begin).count()),
+                std::memory_order_relaxed);
         }
     } catch (...) {
         // 死锁牺牲者不能把未授予的排他锁请求遗留在队列中。
@@ -230,7 +241,12 @@ bool LockManager::LockUpgrade(Txn *txn, const RowId &rid) {
     // sharing_cnt_ == 1 表示只剩当前事务自己的共享锁，可以完成升级。
     while (req_queue.is_writing_ || req_queue.sharing_cnt_ > 1) {
       CheckAbort(txn, req_queue);
+      const auto wait_begin = std::chrono::steady_clock::now();
       req_queue.cv_.wait(lock);
+      wait_count_.fetch_add(1, std::memory_order_relaxed);
+      wait_nanoseconds_.fetch_add(static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - wait_begin).count()),
+          std::memory_order_relaxed);
     }
   } catch (...) {
     cleanup_upgrade();

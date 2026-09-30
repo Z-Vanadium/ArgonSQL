@@ -10,6 +10,10 @@
 #include "common/macros.h"
 #include "concurrency/txn.h"
 
+class LockManager;
+class LogManager;
+class TxnManager;
+
 class ExecuteContext {
  public:
   /**
@@ -18,8 +22,11 @@ class ExecuteContext {
    * @param catalog The catalog that the executor uses
    * @param bpm The buffer pool manager that the executor uses
    */
-  ExecuteContext(Txn *transaction, CatalogManager *catalog, BufferPoolManager *bpm)
-      : transaction_(transaction), catalog_{catalog}, bpm_{bpm} {}
+  ExecuteContext(Txn *transaction, CatalogManager *catalog, BufferPoolManager *bpm,
+                 LockManager *lock_manager = nullptr, LogManager *log_manager = nullptr,
+                 TxnManager *txn_manager = nullptr)
+      : transaction_(transaction), catalog_{catalog}, bpm_{bpm}, lock_manager_{lock_manager},
+        log_manager_{log_manager}, txn_manager_{txn_manager} {}
 
   ~ExecuteContext() = default;
 
@@ -34,6 +41,12 @@ class ExecuteContext {
   /** @return the buffer pool manager */
   BufferPoolManager *GetBufferPoolManager() { return bpm_; }
 
+  LockManager *GetLockManager() { return lock_manager_; }
+
+  LogManager *GetLogManager() { return log_manager_; }
+
+  TxnManager *GetTxnManager() { return txn_manager_; }
+
  private:
   /** The recovery context associated with this executor context */
   Txn *transaction_;
@@ -41,6 +54,9 @@ class ExecuteContext {
   CatalogManager *catalog_;
   /** The buffer pool manager associated with this executor context */
   BufferPoolManager *bpm_;
+  LockManager *lock_manager_{nullptr};
+  LogManager *log_manager_{nullptr};
+  TxnManager *txn_manager_{nullptr};
 };
 
 #endif  // MINISQL_EXECUTE_CONTEXT_H

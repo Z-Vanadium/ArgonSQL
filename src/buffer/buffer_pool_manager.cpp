@@ -41,12 +41,15 @@ Page *BufferPoolManager::FetchPage(page_id_t page_id) {
   auto it = page_table_.find(page_id);
   // 1.1 如果 P 存在，说明该页已经在缓冲池中。
   if (it != page_table_.end()) {
+    fetch_hit_count_.fetch_add(1, std::memory_order_relaxed);
     frame_id_t frame_id = it->second; // 获取对应的帧ID。
     Page *page = &pages_[frame_id];    // 获取 Page 对象指针。
     page->pin_count_++;                 // 增加页面的固定计数。
     replacer_->Pin(frame_id);           // 通知 replacer 该帧被固定，使其不能被替换。
     return page;                        // 返回获取到的页面指针。
   }
+
+  fetch_miss_count_.fetch_add(1, std::memory_order_relaxed);
 
   // 1.2 如果 P 不存在（即不在缓冲池中），需要从磁盘读取到缓冲池。
   frame_id_t frame_id = INVALID_FRAME_ID; // 声明一个变量来存储找到的空闲帧ID。

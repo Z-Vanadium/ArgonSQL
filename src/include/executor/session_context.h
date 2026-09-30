@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "concurrency/txn.h"
+#include "concurrency/txn_manager.h"
 #include "parser/parser_context.h"
 
 /**
@@ -18,6 +19,17 @@
 class SessionContext {
  public:
   explicit SessionContext(uint64_t session_id = 0) : session_id_(session_id) {}
+
+  ~SessionContext() {
+    // TCP 连接异常断开时没有机会执行 ROLLBACK SQL。Session 析构必须把
+    // 仍处于 Growing/Shrinking 的事务回滚并释放锁，避免连接泄漏锁资源。
+    if (transaction_ != nullptr && txn_manager_ != nullptr &&
+        transaction_->GetState() != TxnState::kCommitted &&
+        transaction_->GetState() != TxnState::kAborted) {
+      txn_manager_->Abort(transaction_);
+    }
+    if (owns_transaction_) delete transaction_;
+  }
 
   /** 返回服务器分配的连接 ID，便于日志和后续事务管理。 */
   uint64_t GetSessionId() const { return session_id_; }
@@ -34,8 +46,20 @@ class SessionContext {
   /** 返回该连接正在使用的事务；事务生命周期由后续 TxnManager 管理。 */
   Txn *GetTransaction() const { return transaction_; }
 
-  /** 设置该连接关联的事务对象。 */
-  void SetTransaction(Txn *transaction) { transaction_ = transaction; }
+  /** 设置该连接关联的事务对象及其所属数据库的事务管理器。 */
+  void SetTransaction(Txn *transaction, TxnManager *txn_manager = nullptr) {
+    transaction_ = transaction;
+    txn_manager_ = txn_manager;
+    owns_transaction_ = transaction != nullptr && txn_manager != nullptr;
+  }
+
+  /** 提交/回滚完成后清除连接对事务对象的引用。 */
+  void ClearTransaction() {
+    if (owns_transaction_) delete transaction_;
+    transaction_ = nullptr;
+    txn_manager_ = nullptr;
+    owns_transaction_ = false;
+  }
 
   /** 返回该连接独占的 parser，避免不同连接共享 lexer/parser 状态。 */
   ParserContext *GetParser() { return &parser_; }
@@ -44,6 +68,8 @@ class SessionContext {
   uint64_t session_id_;
   std::string current_database_;
   Txn *transaction_{nullptr};
+  TxnManager *txn_manager_{nullptr};
+  bool owns_transaction_{false};
   ParserContext parser_;
 };
 

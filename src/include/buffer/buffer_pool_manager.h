@@ -3,6 +3,7 @@
 
 #include <list>
 #include <mutex>
+#include <atomic>
 #include <unordered_map>
 
 #include "buffer/lru_replacer.h"
@@ -34,6 +35,9 @@ class BufferPoolManager {
 
   bool CheckAllUnpinned();
 
+  uint64_t GetFetchHitCount() const { return fetch_hit_count_.load(); }
+  uint64_t GetFetchMissCount() const { return fetch_miss_count_.load(); }
+
  private:
   /**
    * Allocate new page (operations like create index/table) For now just keep an increasing counter
@@ -55,6 +59,8 @@ class BufferPoolManager {
   Replacer *replacer_;                               // to find an unpinned page for replacement
   list<frame_id_t> free_list_;                       // to find a free page for replacement
   recursive_mutex latch_;                            // to protect shared data structure
+  std::atomic<uint64_t> fetch_hit_count_{0};
+  std::atomic<uint64_t> fetch_miss_count_{0};
 };
 
 #endif  // MINISQL_BUFFER_POOL_MANAGER_H

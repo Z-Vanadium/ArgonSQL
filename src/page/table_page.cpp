@@ -1,5 +1,9 @@
 #include "page/table_page.h"
 
+#include <string>
+
+#include "recovery/log_rec.h"
+
 // TODO: Update interface implementation if apply recovery
 
 void TablePage::Init(page_id_t page_id, page_id_t prev_id, LogManager *log_mgr, Txn *txn) {
@@ -38,6 +42,17 @@ bool TablePage::InsertTuple(Row &row, Schema *schema, Txn *txn, LockManager *loc
   if (i == GetTupleCount()) {
     SetTupleCount(GetTupleCount() + 1);
   }
+  // 插入后 RowId 才确定，因此在这里登记行级 X 锁。正常事务在 growing
+  // 阶段一定可以获得该锁；失败时将槽位标记为空，避免把未授权插入
+  // 留给后续事务可见。
+  if (txn != nullptr && lock_manager != nullptr && !lock_manager->LockExclusive(txn, row.GetRowId())) {
+    SetTupleSize(i, 0);
+    return false;
+  }
+  if (txn != nullptr && log_manager != nullptr) {
+    const std::string key = std::to_string(GetTablePageId()) + ":" + std::to_string(i);
+    log_manager->Append(CreateInsertLog(txn->GetTxnId(), key, static_cast<int32_t>(serialized_size)));
+  }
   return true;
 }
 
@@ -51,6 +66,13 @@ bool TablePage::MarkDelete(const RowId &rid, Txn *txn, LockManager *lock_manager
   // If the tuple is already deleted, abort.
   if (IsDeleted(tuple_size)) {
     return false;
+  }
+  if (txn != nullptr && lock_manager != nullptr && !lock_manager->LockExclusive(txn, rid)) {
+    return false;
+  }
+  if (txn != nullptr && log_manager != nullptr) {
+    const std::string key = std::to_string(rid.GetPageId()) + ":" + std::to_string(slot_num);
+    log_manager->Append(CreateDeleteLog(txn->GetTxnId(), key, static_cast<int32_t>(tuple_size)));
   }
   // Mark the tuple as deleted.
   if (tuple_size > 0) {
@@ -74,6 +96,9 @@ bool TablePage::UpdateTuple(Row &new_row, Row *old_row, Schema *schema, Txn *txn
   if (IsDeleted(tuple_size)) {
     return false;
   }
+  if (txn != nullptr && lock_manager != nullptr && !lock_manager->LockExclusive(txn, old_row->GetRowId())) {
+    return false;
+  }
   // If there is not enough space to update, we need to update via delete followed by an insert (not enough space).
   if (GetFreeSpaceRemaining() + tuple_size < serialized_size) {
     return false;
@@ -89,6 +114,12 @@ bool TablePage::UpdateTuple(Row &new_row, Row *old_row, Schema *schema, Txn *txn
   SetFreeSpacePointer(free_space_pointer + tuple_size - serialized_size);
   new_row.SerializeTo(GetData() + tuple_offset + tuple_size - serialized_size, schema);
   SetTupleSize(slot_num, serialized_size);
+
+  if (txn != nullptr && log_manager != nullptr) {
+    const std::string key = std::to_string(GetTablePageId()) + ":" + std::to_string(slot_num);
+    log_manager->Append(CreateUpdateLog(txn->GetTxnId(), key, static_cast<int32_t>(tuple_size), key,
+                                         static_cast<int32_t>(serialized_size)));
+  }
 
   // Update all tuple offsets.
   for (uint32_t i = 0; i < GetTupleCount(); ++i) {
@@ -152,6 +183,9 @@ bool TablePage::GetTuple(Row *row, Schema *schema, Txn *txn, LockManager *lock_m
   uint32_t tuple_size = GetTupleSize(slot_num);
   // If the tuple is deleted, abort the recovery.
   if (IsDeleted(tuple_size)) {
+    return false;
+  }
+  if (txn != nullptr && lock_manager != nullptr && !lock_manager->LockShared(txn, row->GetRowId())) {
     return false;
   }
   // At this point, we have at least a shared lock on the RID. Copy the tuple data into our result.

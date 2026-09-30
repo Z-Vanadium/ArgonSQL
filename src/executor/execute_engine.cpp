@@ -267,7 +267,13 @@ dberr_t ExecuteEngine::Execute(pSyntaxNode ast) {
   }
   auto start_time = std::chrono::system_clock::now();
   unique_ptr<ExecuteContext> context(nullptr);
-  if (!CurrentDatabase().empty()) context = dbs_.at(CurrentDatabase())->MakeExecuteContext(nullptr);
+  if (!CurrentDatabase().empty()) {
+    // Transaction belongs to the current Session, while Catalog/BufferPool
+    // belong to the shared DBStorageEngine. Every executor therefore receives
+    // both pieces of context instead of silently using a null transaction.
+    Txn *txn = g_active_session == nullptr ? nullptr : g_active_session->GetTransaction();
+    context = dbs_.at(CurrentDatabase())->MakeExecuteContext(txn);
+  }
   switch (ast->type_) {
     case kNodeCreateDB:
       return ExecuteCreateDatabase(ast, context.get());
@@ -696,21 +702,46 @@ dberr_t ExecuteEngine::ExecuteTrxBegin(pSyntaxNode ast, ExecuteContext *context)
 #ifdef ENABLE_EXECUTE_DEBUG
   LOG(INFO) << "ExecuteTrxBegin" << std::endl;
 #endif
-  return DB_FAILED;
+  if (g_active_session == nullptr || context == nullptr || context->GetTxnManager() == nullptr) {
+    Output() << "No database selected" << std::endl;
+    return DB_FAILED;
+  }
+  if (g_active_session->GetTransaction() != nullptr) {
+    Output() << "Transaction already active" << std::endl;
+    return DB_FAILED;
+  }
+  Txn *txn = context->GetTxnManager()->Begin();
+  g_active_session->SetTransaction(txn, context->GetTxnManager());
+  Output() << "Transaction started" << std::endl;
+  return DB_SUCCESS;
 }
 
 dberr_t ExecuteEngine::ExecuteTrxCommit(pSyntaxNode ast, ExecuteContext *context) {
 #ifdef ENABLE_EXECUTE_DEBUG
   LOG(INFO) << "ExecuteTrxCommit" << std::endl;
 #endif
-  return DB_FAILED;
+  if (g_active_session == nullptr || context == nullptr || g_active_session->GetTransaction() == nullptr) {
+    Output() << "No active transaction" << std::endl;
+    return DB_FAILED;
+  }
+  context->GetTxnManager()->Commit(g_active_session->GetTransaction());
+  g_active_session->ClearTransaction();
+  Output() << "Transaction committed" << std::endl;
+  return DB_SUCCESS;
 }
 
 dberr_t ExecuteEngine::ExecuteTrxRollback(pSyntaxNode ast, ExecuteContext *context) {
 #ifdef ENABLE_EXECUTE_DEBUG
   LOG(INFO) << "ExecuteTrxRollback" << std::endl;
 #endif
-  return DB_FAILED;
+  if (g_active_session == nullptr || context == nullptr || g_active_session->GetTransaction() == nullptr) {
+    Output() << "No active transaction" << std::endl;
+    return DB_FAILED;
+  }
+  context->GetTxnManager()->Abort(g_active_session->GetTransaction());
+  g_active_session->ClearTransaction();
+  Output() << "Transaction rolled back" << std::endl;
+  return DB_SUCCESS;
 }
 
 /**

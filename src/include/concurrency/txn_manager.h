@@ -2,6 +2,7 @@
 #define MINISQL_TXN_MANAGER_H
 
 #include <atomic>
+#include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
 
@@ -9,12 +10,16 @@
 #include "concurrency/txn.h"
 
 class LockManager;
+class LogManager;
 
 class TxnManager {
  public:
   explicit TxnManager(LockManager *lock_mgr);
 
-  ~TxnManager() = default;
+  ~TxnManager();
+
+  /** 将该数据库实例的 WAL 管理器绑定到事务生命周期。 */
+  void SetLogManager(LogManager *log_mgr) { log_mgr_ = log_mgr; }
 
   /**
    * Begins a new transaction.
@@ -48,10 +53,12 @@ class TxnManager {
 
  private:
   LockManager *lock_mgr_{nullptr};
+  LogManager *log_mgr_{nullptr};
   std::atomic<txn_id_t> next_txn_id_{0};
   /** The transaction map is a global list of all the running transactions in the system. */
   std::unordered_map<txn_id_t, Txn *> txn_map_{};
   std::shared_mutex rw_latch_{};
+  std::mutex log_latch_{};
 };
 
 #endif  // MINISQL_TXN_MANAGER_H

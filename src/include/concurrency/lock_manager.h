@@ -166,6 +166,9 @@ public:
 
     inline void DisableCycleDetection() { enable_cycle_detection_ = false; }
 
+    uint64_t GetWaitCount() const { return wait_count_.load(); }
+    uint64_t GetWaitNanoseconds() const { return wait_nanoseconds_.load(); }
+
 private:
     void LockPrepare(Txn *txn, const RowId &rid);
 
@@ -184,6 +187,8 @@ private:
     std::atomic<bool> enable_cycle_detection_{false};
     std::chrono::milliseconds cycle_detection_interval_{100};
     TxnManager *txn_mgr_{nullptr};
+    std::atomic<uint64_t> wait_count_{0};
+    std::atomic<uint64_t> wait_nanoseconds_{0};
 };
 
 #endif  // MINISQL_LOCK_MANAGER_H
