@@ -82,6 +82,9 @@ class ExecuteEngine {
   /** 更新当前请求所属会话的数据库；兼容旧 CLI 时更新 current_db_。 */
   void SetCurrentDatabase(std::string database);
 
+  /** 输出各数据库的 Buffer Pool 命中和锁等待累计统计。 */
+  void DumpStatistics(std::ostream &output) const;
+
  private:
   static std::unique_ptr<AbstractExecutor> CreateExecutor(ExecuteContext *exec_ctx, const AbstractPlanNodeRef &plan);
 

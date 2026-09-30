@@ -201,6 +201,22 @@ void ExecuteEngine::SetCurrentDatabase(std::string database) {
   }
 }
 
+void ExecuteEngine::DumpStatistics(std::ostream &output) const {
+  std::shared_lock<std::shared_mutex> lock(dbs_latch_);
+  output << "ArgonSQL statistics\n";
+  for (const auto &entry : dbs_) {
+    const auto *db = entry.second;
+    const uint64_t hits = db->GetBufferPoolHitCount();
+    const uint64_t misses = db->GetBufferPoolMissCount();
+    const uint64_t waits = db->GetLockWaitCount();
+    const uint64_t wait_ns = db->GetLockWaitNanoseconds();
+    const uint64_t total = hits + misses;
+    output << "database=" << entry.first << " buffer_hits=" << hits << " buffer_misses=" << misses
+           << " buffer_hit_ratio=" << (total == 0 ? 0.0 : static_cast<double>(hits) / total)
+           << " lock_waits=" << waits << " lock_wait_ms=" << (wait_ns / 1000000.0) << "\n";
+  }
+}
+
 std::unique_ptr<AbstractExecutor> ExecuteEngine::CreateExecutor(ExecuteContext *exec_ctx,
                                                                 const AbstractPlanNodeRef &plan) {
   switch (plan->GetType()) {

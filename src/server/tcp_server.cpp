@@ -19,12 +19,15 @@
 
 namespace {
 volatile std::sig_atomic_t g_stop_requested = 0;
+volatile std::sig_atomic_t g_metrics_requested = 0;
 
 void HandleStopSignal(int) {
   // 信号处理函数不能安全地操作 epoll、mutex 或 C++ 容器，因此这里只设置
   // 一个 sig_atomic_t 标记；主循环会在下一次事件循环中执行正常清理。
   g_stop_requested = 1;
 }
+
+void HandleMetricsSignal(int) { g_metrics_requested = 1; }
 
 void InstallStopSignalHandlers() {
   struct sigaction action {};
@@ -34,6 +37,8 @@ void InstallStopSignalHandlers() {
   action.sa_flags = 0;
   sigaction(SIGINT, &action, nullptr);
   sigaction(SIGTERM, &action, nullptr);
+  action.sa_handler = HandleMetricsSignal;
+  sigaction(SIGUSR1, &action, nullptr);
 }
 
 constexpr size_t kReceiveBufferSize = 4096;
@@ -104,6 +109,10 @@ int TcpServer::Run() {
   // thread_pool_ 中完成，因此空闲连接不会占用 SQL worker。
   epoll_event events[kMaxEvents];
   while (!stopping_) {
+    if (g_metrics_requested) {
+      g_metrics_requested = 0;
+      engine_.DumpStatistics(std::cerr);
+    }
     const int event_count = epoll_wait(epoll_fd_, events, kMaxEvents, -1);
     if (event_count < 0) {
       if (errno == EINTR) {
