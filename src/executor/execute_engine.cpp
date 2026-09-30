@@ -511,15 +511,49 @@ dberr_t ExecuteEngine::ExecuteCreateTable(pSyntaxNode ast, ExecuteContext *conte
 #ifdef ENABLE_EXECUTE_DEBUG
   LOG(INFO) << "ExecuteCreateTable" << std::endl;
 #endif
-  string db_name = ast->child_->val_;
-  if(dbs_.find(db_name) != dbs_.end()){
-    return DB_ALREADY_EXIST;
+  if (CurrentDatabase().empty() || context == nullptr) {
+    Output() << "No database selected" << std::endl;
+    return DB_NOT_EXIST;
   }
-  else{
-    auto engine = new DBStorageEngine(db_name, true);
-    dbs_.insert(make_pair(db_name, engine));
-    return DB_SUCCESS;
+
+  // CREATE TABLE 的 AST 是：table_name -> column_definition_list。
+  // 旧实现错误地把 table_name 当成数据库名重新打开 DBStorageEngine，
+  // 导致 SQL 层无法真正创建表；这里将语法树转换成 Catalog 所需的 Schema。
+  pSyntaxNode table_name_node = ast->child_;
+  pSyntaxNode definition_list = table_name_node == nullptr ? nullptr : table_name_node->next_;
+  if (table_name_node == nullptr || definition_list == nullptr) return DB_FAILED;
+
+  std::vector<Column *> columns;
+  uint32_t column_index = 0;
+  for (pSyntaxNode definition = definition_list->child_; definition != nullptr; definition = definition->next_) {
+    pSyntaxNode name_node = definition->child_;
+    pSyntaxNode type_node = name_node == nullptr ? nullptr : name_node->next_;
+    if (name_node == nullptr || type_node == nullptr || name_node->val_ == nullptr || type_node->val_ == nullptr) {
+      for (auto *column : columns) delete column;
+      return DB_FAILED;
+    }
+    const bool unique = definition->val_ != nullptr && std::string(definition->val_) == "unique";
+    const std::string type_name = type_node->val_;
+    if (type_name == "int") {
+      columns.emplace_back(new Column(name_node->val_, TypeId::kTypeInt, column_index++, true, unique));
+    } else if (type_name == "float") {
+      columns.emplace_back(new Column(name_node->val_, TypeId::kTypeFloat, column_index++, true, unique));
+    } else if (type_name == "char" && type_node->child_ != nullptr && type_node->child_->val_ != nullptr) {
+      const uint32_t length = static_cast<uint32_t>(std::stoul(type_node->child_->val_));
+      columns.emplace_back(new Column(name_node->val_, TypeId::kTypeChar, length, column_index++, true, unique));
+    } else {
+      for (auto *column : columns) delete column;
+      return DB_FAILED;
+    }
   }
+
+  auto *schema = new TableSchema(columns);
+  TableInfo *table_info = nullptr;
+  const dberr_t result = context->GetCatalog()->CreateTable(table_name_node->val_, schema,
+                                                             context->GetTransaction(), table_info);
+  delete schema;
+  if (result == DB_SUCCESS) Output() << "Query OK, 0 rows affected" << std::endl;
+  return result;
 }
 
 /**
